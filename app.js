@@ -14,6 +14,54 @@ const maint=c=>c.mt||(isGA(c)&&(c.procs||[]).some(p=>/^(tci|tiva)$/i.test(p[0]))
 const MT={TIVA:'TIVA / TCI',Volatile:'Volatile'};
 const niceDate=d=>new Date(d+'T12:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
 
+/* ---------- operation names and groups ---------- */
+const OPMAP={"laparoscopic cholecystectomy":"lap chole","la appendix":"lap appendix","laparoscopic appendecectomy":"lap appendix","trh":"thr","haemarroidectomy":"haemorrhoidectomy","laparoscopic inguinal hernia repair":"lap inguinal hernia repair","sleeve gastrectomy":"lap sleeve gastrectomy","redo gastric bypass":"redo roux en y bypass","gastric band removal":"removal gastric band","removal of gastric band":"removal gastric band","wide local excision breast":"wle breast","laparoscopic tah and bso":"lap tah bso","ankle orif":"orif ankle","plating ankle #":"orif ankle","k wire wrist":"kwire wrist","k wire hand #":"kwire hand","trachy top end":"tracheostomy top end","tracheotomy procedural end":"tracheostomy procedural end","perc trache procedural end":"tracheostomy procedural end","ln bx":"lymph node biopsy","rupturef aaa repair":"ruptured aaa repair","circ":"circumcision","hand debridement":"debridement hand","repair quadriceps":"quadriceps repair","laparascopic adhesiolysis":"lap adhesiolysis","laparoscopy adhesiolysis":"lap adhesiolysis","laparoscopic division of adhesions":"lap adhesiolysis","laparascopy":"laparoscopy","laparoscopic right hemicolectomy":"lap right hemicolectomy","laparoscopic partial gastrectomy":"lap partial gastrectomy","major incisional hernia remair":"incisional hernia repair","i and d perianalabscess":"i and d perianal abscess","perianal abscess i and d":"i and d perianal abscess","cvc":"cvc insertion","central line":"cvc insertion","thyroid lobectomy":"hemithyroidectomy","nasal septoplasty":"septoplasty","fixation # rad ulnar":"orif radius and ulnar","paraumbilical hernia":"paraumbilical hernia repair","periumbilical hernia repair":"paraumbilical hernia repair","ovarian cyst lap removal":"lap ovarian cystectomy","intubtion and chest drain":"intubation and chest drain","spigalian hernia repair":"spigelian hernia repair","fistulaotomy":"fistulotomy","pelvic exeturation haemorrhage":"pelvic exenteration haemorrhage","laparotomy hartmans hysterectomy":"laparotomy hartmanns hysterectomy","salpingooopherectomy":"salpingo-oophorectomy","lap oopherectomy":"lap oophorectomy","trocanter orif hip":"trochanter orif hip","removal gastric band and sleeve gastrec tomy":"removal gastric band and sleeve gastrectomy","metatarsophal jt fusion":"metatarsophalangeal jt fusion","intubation broncheolitis superv":"intubation bronchiolitis superv","exfix ankle fracture":"x fix ankle","tah bso":"open tah bso","lap incisional hernia":"lap incisional hernia repair","nissans fundoplication":"lap fundoplication","wound washout andpop":"wound washout and pop","hysteroscopy, procede to laparoscopy":"laparoscopy hysteroscopy","bilateral wles":"bilateral wle breast","laparotomy ileostomy reversal":"laparotomy reversal of ileostomy","hot laparoscopic cholecystectomy":"lap chole","laparoscopic gastric bypass":"roux en y gastric bypass","open inguinal hernia repair":"inguinal hernia repair","open hernia repair":"inguinal hernia repair","haemorroids":"haemorrhoidectomy","laparoscopy":"diagnostic laparoscopy","im nail femur":"femoral nail","ureteroscopy and laser":"ureteric laser stone fragmentation","renal stone laser removal":"ureteric laser stone fragmentation","hysteroscopy ablation":"endometrial ablation","orif ankle prone":"orif ankle","shoulder relocation":"mua shoulder","lines":"cvc insertion","perc trache":"tracheostomy procedural end","laparoscopic cystectomy":"lap ovarian cystectomy","mtp bunion":"bunion repair","thd":"haemorrhoidectomy"};
+const tidyName=op=>{let v=String(op||'').replace(/\s+/g,' ').trim(); for(let i=0;i<4&&OPMAP[normOp(v)];i++) v=OPMAP[normOp(v)]; return v};
+const G={ob:'Obstetrics',blk:'Analgesic block or epidural',air:'Intubation and airway (ICU and ED)',line:'Lines, drains and bedside procedures',icu:'ICU admission, transfer and resuscitation',
+  eye:'Ophthalmic',mf:'Maxillofacial and dental',ent:'ENT, head and neck',bil:'Cholecystectomy and biliary',bar:'Bariatric',ugi:'Upper GI',her:'Hernia repair',
+  col:'Colorectal resection and stoma',ano:'Anorectal',brs:'Breast',gyl:'Gynaecology: laparoscopy and major',gym:'Gynaecology: hysteroscopy and minor',
+  uro:'Urology: endoscopic',uro2:'Urology: open and scrotal',vas:'Vascular and amputation',hip:'Hip and femoral fracture surgery',arth:'Joint replacement',
+  fx:'Fracture fixation (other)',ort:'Arthroscopy, MUA and other orthopaedic',soft:'Abscess, wound and soft tissue',lap:'Laparotomy, laparoscopy and appendix',gen:'Other general surgery',oth:'Other'};
+const GROUPS=Object.keys(G).map(k=>G[k]);
+const GRULES=[
+ [/lscs|labour|pph|third degree|c section|percreta/,'ob'],
+ [/kwire removal|removal (metalwork|hardware)|^mua (?!femur)|relocation/,'ort'],
+ [/\bblocks?\b|epidural|analgesia/,'blk'],
+ [/intubat|intubt|\bett\b|extubat|trache|trachy|foi\b|bronchoscopy|covid/,'air'],
+ [/cvc|central line|^lines$|midline|chest drain|io needle|lumbar puncture|\blp\b/,'line'],
+ [/admission|transfer|retrieval|stabili[sz]ation|cpr|arrest|balloon pump|\bpci\b|eccor|\bmri\b|^ct |organ (donation|retrieval)/,'icu'],
+ [/cataract|phaco|ozurdex|rectus|vitreous|tear duct|orbit/,'eye'],
+ [/dental|teeth|mandib|maxillary|zygoma|tongue|lip lacer|forehead|facial/,'mf'],
+ [/tonsil|adenoid|grommet|septoplasty|septal|fess|laryng|pharyng|oesophagoscopy|neck dissection|thyroid|parotid|mastoid|eua ear|nasal|nose|i and d (neck|cheek)|thyroglossal|cervical lymph/,'ent'],
+ [/chole|bile duct|gallbladder|liver cyst|biliary/,'bil'],
+ [/sleeve|roux|gastric bypass|gastric band/,'bar'],
+ [/fundoplication|hellers|gastrectomy|gastropexy|gastrojejun|jejunostomy|\bpeg\b|\bpej\b|\bogd\b|gastric tumour|hiatus/,'ugi'],
+ [/hysterectomy|\btah\b|\bbso\b|ooph|oopher|ovarian|sterili|lap and dye|ectopic|myomectomy|endometriosis|laparoscopy hysteroscopy|laparotomy cyst removal|hole bladder|laparoscopic cystectomy/,'gyl'],
+ [/hernia/,'her'],
+ [/colectomy|anterior resection|hartman|proctectomy|ileostomy|stoma|rectopexy|tamis|ileocolic|colonic|bowel resection|sb resection|exenteration/,'col'],
+ [/eua (rectum|anus|anal|seton|haemorr)|haemorr|^seton|fistul|pilonidal|mucopexy|^thd$|perianal|sigmoidoscopy|^manual evacuation$/,'ano'],
+ [/breast|\bwles?\b|mastectom|mammop|axillary|lat dorsi/,'brs'],
+ [/hysteroscop|erpc|mirena|bartholin|labial|vulval|vagina|loop excision|fentons|eua gynae|endometrial|fibroid|post repair/,'gym'],
+ [/cystoscopy|turbt|turp|\btur\b|ureter|stone|urethral|bladder neck|trus|cystolithopaxy|suprapubic/,'uro'],
+ [/circumcision|hydrocele|orchidectomy|vasectomy|torsion|frenuloplasty|nephrectomy|prostatectomy/,'uro2'],
+ [/\baka\b|\bbka\b|amputation|\baaa\b|evar|carotid|fem pop|artery|angio|vascular bleed/,'vas'],
+ [/hemiarthroplasty|\bdhs\b|femoral (nail|plate|fracture)|femur|cannulated hip|trochanter/,'hip'],
+ [/\bthr\b|\btkr\b|knee revision|unicompartment|replacement|redo hip/,'arth'],
+ [/orif|k ?wire|\bnail\b|x ?fix|exfix|plating|olecranon|fixation|banding/,'fx'],
+ [/\bmua\b|relocation|arthroscopy|metalwork|hardware|tendon|\bacj\b|\bacl\b|bunion|fusion|osteotomy|trigger finger|terminalisation|quadriceps|achilles|hip injection|patella|metatarsal|shoulder joint/,'ort'],
+ [/laparotomy|laparoscop|laparostomy|appendix|adhesio|\babdo\b/,'lap'],
+ [/abscess|i and d|lipoma|debridement|washout|lacerat|wound|lymph node|\bln\b|cyst|skin|dogbite|foreign body|exploration|haematoma|fasciotom|thorn|tissue excision/,'soft'],
+
+];
+const GSPEC={'General':'gen','Trauma':'ort','Orthopaedics':'ort','Gynae':'gym','Urology':'uro2','ENT':'ent','Maxillo-facial':'mf','Dental':'mf','Ophthalmics':'eye','Vascular':'vas','Obstetrics':'ob','Intensive Care':'icu','Resuscitation':'icu','Plastics':'soft'};
+function autoGroup(c){
+  const n=normOp(c.op); if(!n) return '';
+  if(c.spec==='Gynae'&&/^(diagnostic )?laparoscopy$|^laparotomy/.test(n)) return G.gyl;
+  for(const [re,k] of GRULES) if(re.test(n)) return G[k];
+  return G[GSPEC[c.spec]||'oth'];
+}
+const grp=c=>c.grp||autoGroup(c);
+
 /* ---------- storage on this device ---------- */
 let all=[], dirty={}, meta={sha:'',etag:'',lastSync:0,lastBackup:0,changed:false,replace:false}, cfg=null, cache=null, syncErr='';
 const idb=(()=>{let p;const open=()=>p||(p=new Promise((res,rej)=>{const r=indexedDB.open('anaesthetic-logbook',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)}));
@@ -45,12 +93,12 @@ const q=v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"';
 function toCsv(L,withIds){
   const extra=Math.max(0,Math.max.apply(null,[3].concat(L.map(c=>(c.procs||[]).length)))-3);
   const head=HEAD.slice(); for(let i=0;i<extra;i++){const n=i+4;head.push('Procedure '+n,'Procedure '+n+': Operator Status','Procedure '+n+': Technique')}
-  head.push('Maintenance'); const xs=[]; if(withIds){L.forEach(c=>{if(c.x)Object.keys(c.x).forEach(k=>{if(!xs.includes(k))xs.push(k)})}); xs.forEach(k=>head.push(k)); head.push('ID','Updated')}
+  head.push('Maintenance','Operation Group'); const xs=[]; if(withIds){L.forEach(c=>{if(c.x)Object.keys(c.x).forEach(k=>{if(!xs.includes(k)&&!KNOWN.test(k))xs.push(k)})}); xs.forEach(k=>head.push(k)); head.push('ID','Updated')}
   const tm=t=>t?t+':00':'';
   const rows=L.map(c=>{const p=c.procs||[], cell=i=>p[i]?[p[i][0],p[i][1]||'',p[i][2]||'']:['','',''];
     let r=[withIds?c.d:uk(c.d),tm(c.s),tm(c.e||c.s),c.sup,c.sex,c.age===''||c.age==null?'':(+c.age).toFixed(1),c.asa,c.pri,c.spec,c.op,c.a1,c.a2,c.a2s,c.a2t]
       .concat(cell(0),cell(1),cell(2),[c.notes,c.inc,c.incd]); for(let i=0;i<extra;i++) r=r.concat(cell(3+i));
-    r.push(maint(c)); if(withIds){xs.forEach(k=>r.push(c.x&&c.x[k]||'')); r.push(c.id,c.u?new Date(c.u).toISOString():'')} return r.map(q).join(',')});
+    r.push(maint(c),grp(c)); if(withIds){xs.forEach(k=>r.push(c.x&&c.x[k]||'')); r.push(c.id,c.u?new Date(c.u).toISOString():'')} return r.map(q).join(',')});
   return [head.map(q).join(',')].concat(rows).join('\r\n')+'\r\n';
 }
 function csvRows(text){
@@ -62,7 +110,7 @@ function csvRows(text){
     else cell+=ch }
   row.push(cell); if(row.length>1||row[0]!=='')rows.push(row); return rows;
 }
-const KNOWN=/^(date|start|end|supervision|sex|age|asa|priority|speciality|operation|anaesthetic [12]|anesthetic 2: (operator status|technique)|procedure \d+(: (operator status|technique))?|notes|incidents|incident details|maintenance|id|updated)$/i;
+const KNOWN=/^(date|start|end|supervision|sex|age|asa|priority|speciality|operation|anaesthetic [12]|anesthetic 2: (operator status|technique)|procedure \d+(: (operator status|technique))?|notes|incidents|incident details|maintenance|operation group|id|updated)$/i;
 const newId=()=>'n'+Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 function readCsv(text){
   const rows=csvRows(text); if(!rows.length) throw new Error('The file is empty.');
@@ -83,7 +131,7 @@ function readCsv(text){
     const u=Date.parse(g('updated')); const mtv=g('maintenance'), mt=/^(tiva|tci)/i.test(mtv)?'TIVA':/^vol/i.test(mtv)?'Volatile':'';
     let x=null; rows[0].forEach((h,i)=>{const k=h.trim(); if(k&&!KNOWN.test(k)&&sp(r[i])){x=x||{};x[k]=sp(r[i])}});
     out.push({id,d,s:tm(g('start')),e:tm(g('end')),sup:g('supervision'),sex:g('sex'),age:age===''||isNaN(+age)?'':Math.round(+age),asa:g('asa'),pri:g('priority'),spec:g('speciality'),op:g('operation'),
-      a1:a1==='spinal'?'Spinal':a1,a2:g('anaesthetic 2'),a2s:g('anesthetic 2: operator status'),a2t:g('anesthetic 2: technique'),procs,notes:scrub(g('notes')),inc:g('incidents'),incd:scrub(g('incident details')),mt,u:isNaN(u)?0:u}); if(x) out[out.length-1].x=x;
+      a1:a1==='spinal'?'Spinal':a1,a2:g('anaesthetic 2'),a2s:g('anesthetic 2: operator status'),a2t:g('anesthetic 2: technique'),procs,notes:scrub(g('notes')),inc:g('incidents'),incd:scrub(g('incident details')),mt,u:isNaN(u)?0:u}); {const o=out[out.length-1], gv=g('operation group'); if(x) o.x=x; if(gv&&GROUPS.includes(gv)&&gv!==autoGroup(o)) o.grp=gv}
   }
   return {cases:out,removed};
 }
@@ -142,9 +190,11 @@ function drawBackup(){
   $('ghErr').hidden=!syncErr; $('ghErr').textContent=syncErr;
   const stale=all.length&&(!meta.lastBackup||(meta.changed&&Date.now()-meta.lastBackup>30*864e5));
   $('bkState').textContent='Last backup file saved: '+when(meta.lastBackup)+'.'; $('bkState').className='note'+(stale?' warn':'');
+  const nt=untidy().length; $('tdState').textContent=nt?nt+(nt===1?' case uses':' cases use')+' an operation name that has a standard form (for example "laparoscopic cholecystectomy" becomes "lap chole").':'Operation names are tidy.'; $('tdGo').hidden=!nt; if(!tdArmed) $('tdGo').textContent='Rename '+nt+(nt===1?' case':' cases');
   $('nag').hidden=!(all.length===0||stale);
   $('nagText').textContent=all.length===0?'No cases on this phone yet. Load your logbook file in Backup.':'No backup file saved '+(meta.lastBackup?'in the last 30 days':'yet')+'.';
 }
+const untidy=()=>all.filter(c=>c.op&&tidyName(c.op)!==c.op); let tdArmed=false;
 let pendingCfg=null, pendingRemote=null, pendingRestore=null;
 function setupBackup(){
   $('ghConnect').onclick=async()=>{
@@ -184,6 +234,8 @@ function setupBackup(){
       $('rsText').textContent='The file has '+pendingRestore.cases.length.toLocaleString('en-GB')+' cases'+(pendingRestore.removed?' ('+pendingRestore.removed+' patient numbers were removed from notes)':'')+'. '+(all.length?'This replaces the '+all.length.toLocaleString('en-GB')+' cases on this phone'+(cfg?' and on GitHub.':'.'):'');
       $('rsConfirm').hidden=false }catch(e){ toast(e.message) } $('rsFile').value='' };
   $('rsYes').onclick=()=>{ all=pendingRestore.cases; pendingRestore=null; dirty={}; meta.changed=true; if(cfg) meta.replace=true; cache=null; $('rsConfirm').hidden=true; persist(); syncLabel(); refresh(); loadForm(blank()); toast('Logbook loaded'); syncSoon() };
+  $('tdGo').onclick=()=>{ if(!tdArmed){tdArmed=true;$('tdGo').textContent='Tap again to rename';return} tdArmed=false; const L=untidy(), now=Date.now();
+    L.forEach(c=>{const n=Object.assign({},c,{op:tidyName(c.op),u:now}); all[all.indexOf(c)]=n; dirty[n.id]=n}); meta.changed=true; cache=null; persist(); syncLabel(); refresh(); toast(L.length+' cases renamed'); syncSoon() };
   $('rsNo').onclick=()=>{pendingRestore=null;$('rsConfirm').hidden=true};
 }
 function download(name,text){ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([text],{type:name.endsWith('.csv')?'text/csv':name.endsWith('.html')?'text/html':'text/plain'})); a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),4000) }
@@ -231,7 +283,7 @@ function blank(keep){
   const all=cases(), d=(keep&&keep.d)||today();
   const sameDay=all.filter(c=>c.d===d&&c.e).map(c=>c.e).sort();
   return {id:null,d,s:(keep&&keep.e)||sameDay[sameDay.length-1]||'',e:'',sup:(keep&&keep.sup)||(all[0]?all[0].sup:''),sex:'',age:'',asa:'',
-    pri:(keep&&keep.pri)||'',spec:(keep&&keep.spec)||'',op:'',a1:'',mt:'',a2:'',a2s:'',a2t:'',procs:[],notes:'',inc:'',incd:''};
+    pri:(keep&&keep.pri)||'',spec:(keep&&keep.spec)||'',op:'',a1:'',mt:'',a2:'',a2s:'',a2t:'',procs:[],notes:'',inc:'',incd:'',grp:''};
 }
 function loadForm(c){
   F=JSON.parse(JSON.stringify(c)); F.procs=F.procs||[]; F.mt=maint(F); fillSnapshot=null;
@@ -244,7 +296,9 @@ function loadForm(c){
   redraw.forEach(f=>f()); drawOps(); a2vis();
 }
 function a2vis(){ $('a2extra').hidden=!F.a2; $('mtBox').hidden=!isGA(F); if(!isGA(F)) F.mt='' }
+function drawGrp(){ const a=autoGroup({op:$('fOp').value,spec:F.spec}), v=F.grp||a; $('fGrp').innerHTML=(v?'':'<option value="">Set from the operation</option>')+GROUPS.map(x=>'<option'+(x===v?' selected':'')+'>'+esc(x)+'</option>').join('') }
 function drawOps(){
+  drawGrp();
   const o=opts(), q=normOp($('fOp').value), host=$('gOp'); let list;
   if(q&&!o.opMap.has(q)) list=o.ops.filter(x=>x.k.includes(q)).slice(0,8);
   else if(q) list=[];
@@ -256,7 +310,7 @@ function drawOps(){
 function smartFill(x){
   if(F.id&&!F._copy) return; if(F.a1||F.a2||F.procs.length) return;
   const c=x.last; fillSnapshot={spec:F.spec,pri:F.pri};
-  F.a1=c.a1||''; F.mt=maint(c); F.a2=c.a2||''; F.a2t=c.a2?c.a2t||'':''; F.a2s=''; F.procs=(c.procs||[]).map(p=>[p[0],'','']);
+  F.grp=c.grp||''; F.a1=c.a1||''; F.mt=maint(c); F.a2=c.a2||''; F.a2t=c.a2?c.a2t||'':''; F.a2s=''; F.procs=(c.procs||[]).map(p=>[p[0],'','']);
   if(!F.spec) F.spec=c.spec; if(!F.pri) F.pri=c.pri;
   $('fillText').textContent='Filled in from your last '+x.label+' ('+niceDate(c.d)+'). Change anything that differs.';
   $('fillNote').hidden=false; redraw.forEach(f=>f()); a2vis();
@@ -280,6 +334,7 @@ function setupForm(){
   const durs=[[30,'30 min'],[45,'45 min'],[60,'1 h'],[90,'1½ h'],[120,'2 h'],[180,'3 h'],[240,'4 h']];
   durs.forEach(([m,l])=>{const b=document.createElement('button');b.type='button';b.className='chip';b.textContent=l;b.onclick=()=>{if(!$('fStart').value){$('fStart').value='09:00'}$('fEnd').value=addMin($('fStart').value,m)};$('gDur').appendChild(b)});
   $('fOp').oninput=()=>{F.op=$('fOp').value;drawOps()};
+  $('fGrp').onchange=()=>{F.grp=$('fGrp').value};
   $('fOp').onchange=()=>{const x=opts().opMap.get(normOp($('fOp').value)); if(x) smartFill(x)};
   $('fNotes').oninput=idCheck; $('fIncd').oninput=idCheck;
   $('fDate').onchange=()=>{ if(!F.id&&!$('fStart').value){const b=blank({d:$('fDate').value});$('fStart').value=b.s} };
@@ -290,7 +345,7 @@ function setupForm(){
     store({id:F.id,deleted:true}); toast('Case deleted'); loadForm(blank()); refresh() };
 }
 function save(){
-  F.d=$('fDate').value; F.s=$('fStart').value; F.e=$('fEnd').value; F.op=$('fOp').value.replace(/\s+/g,' ').trim();
+  F.d=$('fDate').value; F.s=$('fStart').value; F.e=$('fEnd').value; F.op=tidyName($('fOp').value); if(F.grp===autoGroup(F)) F.grp='';
   const a=$('fAge').value; F.age=a===''?'':Math.round(+a); F.notes=$('fNotes').value.trim(); F.inc=$('fInc').value; F.incd=$('fIncd').value.trim();
   const miss=[]; if(!F.d)miss.push('date'); if(!F.op)miss.push('operation'); if(!F.a1&&!F.a2)miss.push('anaesthetic technique'); if(isGA(F)&&!F.mt&&(!F.id||F._copy))miss.push('maintenance (TIVA or volatile)');
   if(miss.length){$('formErr').textContent='Add the '+miss.join(', ')+' before saving.';$('formErr').hidden=false;return}
@@ -307,7 +362,7 @@ let shown=60, flagOnly=false;
 const flagged=c=>!c.s||!c.e||c.s===c.e;
 function drawList(){
   const q=$('q').value.toLowerCase().trim(), y=$('qYear').value;
-  const all=cases().filter(c=>(!y||c.d.startsWith(y))&&(!flagOnly||flagged(c))&&(!q||[c.op,c.spec,c.a1,c.a2,c.notes,c.sup,c.pri,(c.procs||[]).map(p=>p[0]).join(' '),c.inc,c.incd].join(' ').toLowerCase().includes(q)));
+  const all=cases().filter(c=>(!y||c.d.startsWith(y))&&(!flagOnly||flagged(c))&&(!q||[c.op,grp(c),c.spec,c.a1,c.a2,c.notes,c.sup,c.pri,(c.procs||[]).map(p=>p[0]).join(' '),c.inc,c.incd].join(' ').toLowerCase().includes(q)));
   $('count').textContent=all.length.toLocaleString('en-GB')+(all.length===1?' case':' cases');
   let h='', day='';
   all.slice(0,shown).forEach(c=>{
@@ -355,6 +410,7 @@ function summarise(){
   const S={n,hours:Math.round(m/60),solo:L.filter(c=>c.sup==='Consultant Solo').length,teach:L.filter(c=>/^Teaching/.test(c.sup||'')).length,
     from:$('rFrom').value,to:$('rTo').value,sections:[
     ['Speciality',tally(L,c=>[c.spec])],
+    ['Operation group',tally(L,c=>[grp(c)])],
     ['Priority',tally(L,c=>[c.pri],['Day case','Routine','Urgent','Emergency'])],
     ['ASA grade',tally(L,c=>[c.asa?'ASA '+c.asa:'Not recorded'],['ASA 1','ASA 2','ASA 3','ASA 4','ASA 5','ASA Donor','Not recorded'])],
     ['Age',tally(L,c=>[ageBand(c.age)],['Under 1','1 to 5','6 to 15','16 to 79','80 and over','Not recorded'])],

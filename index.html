@@ -43,6 +43,7 @@
     <h2>Operation</h2>
     <div class="g"><span class="l">Speciality</span><div class="chips" id="gSpec"></div></div>
     <div class="g"><label class="l" for="fOp">Operation</label><input type="text" id="fOp" autocomplete="off" autocapitalize="none" placeholder="Type, or tap one of yours below"><div class="chips" id="gOp"></div></div>
+    <div class="g"><label class="l" for="fGrp">Operation group</label><select id="fGrp"></select></div>
     <div class="banner" id="fillNote" hidden><span id="fillText"></span><button class="linkbtn" id="fillUndo" type="button">Clear</button></div>
   </div>
   <div class="card">
@@ -119,7 +120,12 @@
     <label class="l" for="rsFile">Choose a CSV file</label><input type="file" id="rsFile" accept=".csv,text/csv,text/comma-separated-values">
     <div class="g" id="rsConfirm" hidden><div id="rsText"></div><div class="actions"><button class="btn primary" id="rsYes" type="button">Load this file</button><button class="btn" id="rsNo" type="button">Cancel</button></div></div>
   </div>
-  <div class="note">Version 1.1. Cases are stored on this phone and in the places above, nowhere else.</div>
+  <div class="card">
+    <h2>Tidy operation names</h2>
+    <div class="note" id="tdState"></div>
+    <div class="actions"><button class="btn" id="tdGo" type="button" hidden>Rename</button></div>
+  </div>
+  <div class="note">Version 1.2. Cases are stored on this phone and in the places above, nowhere else.</div>
 </section>
 </main>
 <nav><a href="#new" data-v="new">New case</a><a href="#cases" data-v="cases">Cases</a><a href="#summary" data-v="summary">Summary</a><a href="#backup" data-v="backup">Backup</a></nav>
