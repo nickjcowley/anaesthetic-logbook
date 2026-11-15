@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.github.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0e6f6a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Logbook">
+<title>Anaesthetic Logbook</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header><h1>Anaesthetic Logbook</h1><div id="sync">Loading…</div></header>
+<main>
+<section class="view" id="v-new">
+  <div class="banner" id="nag" hidden><span id="nagText"></span><a class="linkbtn" href="#backup">Open Backup</a></div>
+  <div class="banner" id="editBanner" hidden><span id="editText"></span><button class="linkbtn" id="cancelEdit" type="button">Cancel</button></div>
+  <div class="card">
+    <div class="row">
+      <div class="f" style="flex-basis:100%"><label class="l" for="fDate">Date</label><input type="date" id="fDate"></div>
+      <div class="f"><label class="l" for="fStart">Start</label><input type="time" id="fStart"></div>
+      <div class="f"><label class="l" for="fEnd">End</label><input type="time" id="fEnd"></div>
+    </div>
+    <div class="g"><span class="l">Duration from start</span><div class="chips" id="gDur"></div></div>
+    <div class="g"><span class="l">Supervision</span><div class="chips" id="gSup"></div></div>
+  </div>
+  <div class="card">
+    <h2>Patient</h2>
+    <div class="row">
+      <div class="f" style="max-width:110px"><label class="l" for="fAge">Age (years)</label><input type="number" id="fAge" inputmode="numeric" min="0" max="120"></div>
+      <div class="g"><span class="l">Sex</span><div class="chips" id="gSex"></div></div>
+    </div>
+    <div class="g"><span class="l">ASA</span><div class="chips" id="gAsa"></div></div>
+    <div class="g"><span class="l">Priority</span><div class="chips" id="gPri"></div></div>
+  </div>
+  <div class="card">
+    <h2>Operation</h2>
+    <div class="g"><span class="l">Speciality</span><div class="chips" id="gSpec"></div></div>
+    <div class="g"><label class="l" for="fOp">Operation</label><input type="text" id="fOp" autocomplete="off" autocapitalize="none" placeholder="Type, or tap one of yours below"><div class="chips" id="gOp"></div></div>
+    <div class="banner" id="fillNote" hidden><span id="fillText"></span><button class="linkbtn" id="fillUndo" type="button">Clear</button></div>
+  </div>
+  <div class="card">
+    <h2>Anaesthetic</h2>
+    <div class="g"><span class="l">Primary technique</span><div class="chips" id="gA1"></div></div>
+    <div class="g"><span class="l">Regional or neuraxial</span><div class="chips" id="gA2"></div></div>
+    <div class="g" id="a2extra" hidden><span class="l">Block operator and technique</span><div class="chips" id="gA2s"></div><div class="chips" id="gA2t"></div></div>
+    <div class="g"><span class="l">Procedures and monitoring</span><div class="chips" id="gProc"></div></div>
+  </div>
+  <div class="card">
+    <details id="moreDet"><summary>Notes and incidents</summary>
+      <div class="g"><label class="l" for="fNotes">Notes</label><textarea id="fNotes"></textarea><div class="note warn" id="idWarn" hidden>That looks like an NHS or hospital number. Keep patient identifiers out of the logbook.</div></div>
+      <div class="g"><label class="l" for="fInc">Incident</label><select id="fInc"></select></div>
+      <div class="g"><label class="l" for="fIncd">Incident details</label><textarea id="fIncd"></textarea></div>
+    </details>
+  </div>
+  <div class="note warn" id="formErr" hidden></div>
+  <div class="actions"><button class="btn primary" id="save" type="button">Save case</button><button class="btn danger" id="del" type="button" hidden>Delete</button></div>
+</section>
+
+<section class="view" id="v-cases">
+  <div class="row"><div class="f" style="flex:2"><label class="l" for="q">Search</label><input type="search" id="q" placeholder="Operation, block, note…"></div>
+  <div class="f"><label class="l" for="qYear">Year</label><select id="qYear"></select></div></div>
+  <div class="chips" id="gFlag"></div>
+  <div class="note" id="count"></div>
+  <div class="list" id="list"></div>
+  <button class="btn" id="moreBtn" type="button" hidden>Show more</button>
+</section>
+
+<section class="view" id="v-summary">
+  <div class="card">
+    <div class="g"><span class="l">Period</span><div class="chips" id="gRange"></div></div>
+    <div class="row"><div class="f"><label class="l" for="rFrom">From</label><input type="date" id="rFrom"></div><div class="f"><label class="l" for="rTo">To</label><input type="date" id="rTo"></div></div>
+  </div>
+  <div class="tiles" id="tiles"></div>
+  <div id="sections" style="display:flex;flex-direction:column;gap:12px"></div>
+  <div class="card">
+    <h2>Export this period</h2>
+    <div class="actions"><button class="btn" id="dlCsv" type="button">Download cases (CSV)</button><button class="btn" id="dlSum" type="button">Download summary (CSV)</button><button class="btn" id="cpSum" type="button">Copy summary as text</button><button class="btn" id="cpCsv" type="button">Copy cases as CSV</button></div>
+    <div class="note">The case file uses the same 26 columns as your current logbook, so it opens in the same places.</div>
+  </div>
+</section>
+<section class="view" id="v-backup">
+  <div class="card">
+    <h2>GitHub sync</h2>
+    <div class="note" id="ghState"></div>
+    <div class="g" id="ghForm">
+      <div class="note">Each saved case updates a CSV file in a private repo of yours. Use a fine-grained token limited to that one repo, with Contents set to read and write.</div>
+      <div class="g"><label class="l" for="ghOwner">GitHub username</label><input type="text" id="ghOwner" autocapitalize="none" autocomplete="off" spellcheck="false"></div>
+      <div class="g"><label class="l" for="ghRepo">Private repo name</label><input type="text" id="ghRepo" autocapitalize="none" autocomplete="off" spellcheck="false"></div>
+      <div class="g"><label class="l" for="ghPath">File name</label><input type="text" id="ghPath" value="logbook.csv" autocapitalize="none" autocomplete="off" spellcheck="false"></div>
+      <div class="g"><label class="l" for="ghToken">Access token</label><input type="password" id="ghToken" autocomplete="off"></div>
+      <button class="btn primary" id="ghConnect" type="button">Connect</button>
+    </div>
+    <div class="g" id="ghChoice" hidden><div id="ghChoiceText"></div><div class="actions"><button class="btn" id="ghUseRemote" type="button">Keep the GitHub copy</button><button class="btn" id="ghUseLocal" type="button">Keep this phone's copy</button><button class="btn" id="ghCancel" type="button">Cancel</button></div></div>
+    <div class="actions" id="ghOn" hidden><button class="btn primary" id="ghSync" type="button">Sync now</button><button class="btn danger" id="ghOff" type="button">Disconnect</button></div>
+    <div class="note warn" id="ghErr" hidden></div>
+  </div>
+  <div class="card">
+    <h2>Backup file</h2>
+    <div class="note" id="bkState"></div>
+    <div class="note">Saves every case as one CSV file that you keep in Files, iCloud Drive or Google Drive, independent of GitHub.</div>
+    <div class="actions"><button class="btn primary" id="bkSave" type="button">Save backup file</button></div>
+  </div>
+  <div class="card">
+    <h2>Restore from file</h2>
+    <div class="note">Loads a logbook CSV (a backup from this app, or your previous logbook's export). It replaces what is on this phone.</div>
+    <label class="l" for="rsFile">Choose a CSV file</label><input type="file" id="rsFile" accept=".csv,text/csv,text/comma-separated-values">
+    <div class="g" id="rsConfirm" hidden><div id="rsText"></div><div class="actions"><button class="btn primary" id="rsYes" type="button">Load this file</button><button class="btn" id="rsNo" type="button">Cancel</button></div></div>
+  </div>
+  <div class="note">Version 1.0. Cases are stored on this phone and in the places above, nowhere else.</div>
+</section>
+</main>
+<nav><a href="#new" data-v="new">New case</a><a href="#cases" data-v="cases">Cases</a><a href="#summary" data-v="summary">Summary</a><a href="#backup" data-v="backup">Backup</a></nav>
+<div id="toast" role="status"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
