@@ -8,6 +8,10 @@ const shiftYears=(d,n)=>(+d.slice(0,4)+n)+d.slice(4);
 const mins=t=>t?(+t.slice(0,2))*60+(+t.slice(3,5)):null;
 const addMin=(t,m)=>{const x=((mins(t)+m)%1440+1440)%1440;return pad(Math.floor(x/60))+':'+pad(x%60)};
 const normOp=s=>String(s||'').toLowerCase().replace(/\s+/g,' ').trim();
+const uk=d=>d?d.slice(8,10)+'/'+d.slice(5,7)+'/'+d.slice(0,4):'';
+const isGA=c=>/^GA/i.test(c.a1||'');
+const maint=c=>c.mt||(isGA(c)&&(c.procs||[]).some(p=>/^(tci|tiva)$/i.test(p[0]))?'TIVA':'');
+const MT={TIVA:'TIVA / TCI',Volatile:'Volatile'};
 const niceDate=d=>new Date(d+'T12:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
 
 /* ---------- storage on this device ---------- */
@@ -41,12 +45,12 @@ const q=v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"';
 function toCsv(L,withIds){
   const extra=Math.max(0,Math.max.apply(null,[3].concat(L.map(c=>(c.procs||[]).length)))-3);
   const head=HEAD.slice(); for(let i=0;i<extra;i++){const n=i+4;head.push('Procedure '+n,'Procedure '+n+': Operator Status','Procedure '+n+': Technique')}
-  if(withIds) head.push('ID','Updated');
+  head.push('Maintenance'); const xs=[]; if(withIds){L.forEach(c=>{if(c.x)Object.keys(c.x).forEach(k=>{if(!xs.includes(k))xs.push(k)})}); xs.forEach(k=>head.push(k)); head.push('ID','Updated')}
   const tm=t=>t?t+':00':'';
   const rows=L.map(c=>{const p=c.procs||[], cell=i=>p[i]?[p[i][0],p[i][1]||'',p[i][2]||'']:['','',''];
-    let r=[+c.d.slice(5,7)+'/'+(+c.d.slice(8,10))+'/'+c.d.slice(2,4),tm(c.s),tm(c.e||c.s),c.sup,c.sex,c.age===''||c.age==null?'':(+c.age).toFixed(1),c.asa,c.pri,c.spec,c.op,c.a1,c.a2,c.a2s,c.a2t]
+    let r=[withIds?c.d:uk(c.d),tm(c.s),tm(c.e||c.s),c.sup,c.sex,c.age===''||c.age==null?'':(+c.age).toFixed(1),c.asa,c.pri,c.spec,c.op,c.a1,c.a2,c.a2s,c.a2t]
       .concat(cell(0),cell(1),cell(2),[c.notes,c.inc,c.incd]); for(let i=0;i<extra;i++) r=r.concat(cell(3+i));
-    if(withIds) r.push(c.id,c.u?new Date(c.u).toISOString():''); return r.map(q).join(',')});
+    r.push(maint(c)); if(withIds){xs.forEach(k=>r.push(c.x&&c.x[k]||'')); r.push(c.id,c.u?new Date(c.u).toISOString():'')} return r.map(q).join(',')});
   return [head.map(q).join(',')].concat(rows).join('\r\n')+'\r\n';
 }
 function csvRows(text){
@@ -58,6 +62,7 @@ function csvRows(text){
     else cell+=ch }
   row.push(cell); if(row.length>1||row[0]!=='')rows.push(row); return rows;
 }
+const KNOWN=/^(date|start|end|supervision|sex|age|asa|priority|speciality|operation|anaesthetic [12]|anesthetic 2: (operator status|technique)|procedure \d+(: (operator status|technique))?|notes|incidents|incident details|maintenance|id|updated)$/i;
 const newId=()=>'n'+Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 function readCsv(text){
   const rows=csvRows(text); if(!rows.length) throw new Error('The file is empty.');
@@ -69,14 +74,16 @@ function readCsv(text){
   for(const r of rows.slice(1)){
     const g=n=>{const i=H[n]; return i==null?'':sp(r[i])};
     let d=g('date'), m;
-    if((m=d.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/))){let y=+m[3]; if(y<100)y+=y>70?1900:2000; d=y+'-'+pad(+m[1])+'-'+pad(+m[2])}
+    if((m=d.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/))) d=m[3]+'-'+pad(+m[2])+'-'+pad(+m[1]);
+    else if((m=d.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/))){const y=+m[3]+(+m[3]>70?1900:2000); d=y+'-'+pad(+m[1])+'-'+pad(+m[2])}
     else if(!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
     const tm=t=>{const x=t.match(/^(\d{1,2}):(\d{2})/); return x?pad(+x[1])+':'+x[2]:''};
     const procs=[]; for(let n=1;H['procedure '+n]!=null;n++){const nm=g('procedure '+n); if(nm) procs.push([nm,g('procedure '+n+': operator status'),g('procedure '+n+': technique')])}
     const age=g('age'), a1=g('anaesthetic 1'); let id=g('id'); if(!id||seen.has(id)) id=newId(); seen.add(id);
-    const u=Date.parse(g('updated'));
+    const u=Date.parse(g('updated')); const mtv=g('maintenance'), mt=/^(tiva|tci)/i.test(mtv)?'TIVA':/^vol/i.test(mtv)?'Volatile':'';
+    let x=null; rows[0].forEach((h,i)=>{const k=h.trim(); if(k&&!KNOWN.test(k)&&sp(r[i])){x=x||{};x[k]=sp(r[i])}});
     out.push({id,d,s:tm(g('start')),e:tm(g('end')),sup:g('supervision'),sex:g('sex'),age:age===''||isNaN(+age)?'':Math.round(+age),asa:g('asa'),pri:g('priority'),spec:g('speciality'),op:g('operation'),
-      a1:a1==='spinal'?'Spinal':a1,a2:g('anaesthetic 2'),a2s:g('anesthetic 2: operator status'),a2t:g('anesthetic 2: technique'),procs,notes:scrub(g('notes')),inc:g('incidents'),incd:scrub(g('incident details')),u:isNaN(u)?0:u});
+      a1:a1==='spinal'?'Spinal':a1,a2:g('anaesthetic 2'),a2s:g('anesthetic 2: operator status'),a2t:g('anesthetic 2: technique'),procs,notes:scrub(g('notes')),inc:g('incidents'),incd:scrub(g('incident details')),mt,u:isNaN(u)?0:u}); if(x) out[out.length-1].x=x;
   }
   return {cases:out,removed};
 }
@@ -179,7 +186,7 @@ function setupBackup(){
   $('rsYes').onclick=()=>{ all=pendingRestore.cases; pendingRestore=null; dirty={}; meta.changed=true; if(cfg) meta.replace=true; cache=null; $('rsConfirm').hidden=true; persist(); syncLabel(); refresh(); loadForm(blank()); toast('Logbook loaded'); syncSoon() };
   $('rsNo').onclick=()=>{pendingRestore=null;$('rsConfirm').hidden=true};
 }
-function download(name,text){ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([text],{type:name.endsWith('.csv')?'text/csv':'text/plain'})); a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),4000) }
+function download(name,text){ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([text],{type:name.endsWith('.csv')?'text/csv':name.endsWith('.html')?'text/html':'text/plain'})); a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),4000) }
 
 /* ---------- option lists learned from the logbook, most used recently first ---------- */
 let optCache=null;
@@ -224,11 +231,11 @@ function blank(keep){
   const all=cases(), d=(keep&&keep.d)||today();
   const sameDay=all.filter(c=>c.d===d&&c.e).map(c=>c.e).sort();
   return {id:null,d,s:(keep&&keep.e)||sameDay[sameDay.length-1]||'',e:'',sup:(keep&&keep.sup)||(all[0]?all[0].sup:''),sex:'',age:'',asa:'',
-    pri:(keep&&keep.pri)||'',spec:(keep&&keep.spec)||'',op:'',a1:'',a2:'',a2s:'',a2t:'',procs:[],notes:'',inc:'',incd:''};
+    pri:(keep&&keep.pri)||'',spec:(keep&&keep.spec)||'',op:'',a1:'',mt:'',a2:'',a2s:'',a2t:'',procs:[],notes:'',inc:'',incd:''};
 }
 function loadForm(c){
-  F=JSON.parse(JSON.stringify(c)); F.procs=F.procs||[]; fillSnapshot=null;
-  $('fDate').value=F.d; $('fStart').value=F.s||''; $('fEnd').value=F.e||''; $('fAge').value=F.age===''||F.age==null?'':F.age; $('fOp').value=F.op||'';
+  F=JSON.parse(JSON.stringify(c)); F.procs=F.procs||[]; F.mt=maint(F); fillSnapshot=null;
+  $('fDate').value=F.d; syncDates(); $('fStart').value=F.s||''; $('fEnd').value=F.e||''; $('fAge').value=F.age===''||F.age==null?'':F.age; $('fOp').value=F.op||'';
   $('fNotes').value=F.notes||''; $('fInc').value=INCIDENTS.includes(F.inc)?F.inc:''; $('fIncd').value=F.incd||'';
   $('moreDet').open=!!(F.notes||F.inc||F.incd); $('fillNote').hidden=true; $('formErr').hidden=true; idCheck();
   const editing=!!F.id&&!F._copy;
@@ -236,7 +243,7 @@ function loadForm(c){
   $('save').textContent=editing?'Save changes':'Save case'; $('del').hidden=!editing; $('del').textContent='Delete'; delArmed=false;
   redraw.forEach(f=>f()); drawOps(); a2vis();
 }
-function a2vis(){ $('a2extra').hidden=!F.a2 }
+function a2vis(){ $('a2extra').hidden=!F.a2; $('mtBox').hidden=!isGA(F); if(!isGA(F)) F.mt='' }
 function drawOps(){
   const o=opts(), q=normOp($('fOp').value), host=$('gOp'); let list;
   if(q&&!o.opMap.has(q)) list=o.ops.filter(x=>x.k.includes(q)).slice(0,8);
@@ -249,7 +256,7 @@ function drawOps(){
 function smartFill(x){
   if(F.id&&!F._copy) return; if(F.a1||F.a2||F.procs.length) return;
   const c=x.last; fillSnapshot={spec:F.spec,pri:F.pri};
-  F.a1=c.a1||''; F.a2=c.a2||''; F.a2t=c.a2?c.a2t||'':''; F.a2s=''; F.procs=(c.procs||[]).map(p=>[p[0],'','']);
+  F.a1=c.a1||''; F.mt=maint(c); F.a2=c.a2||''; F.a2t=c.a2?c.a2t||'':''; F.a2s=''; F.procs=(c.procs||[]).map(p=>[p[0],'','']);
   if(!F.spec) F.spec=c.spec; if(!F.pri) F.pri=c.pri;
   $('fillText').textContent='Filled in from your last '+x.label+' ('+niceDate(c.d)+'). Change anything that differs.';
   $('fillNote').hidden=false; redraw.forEach(f=>f()); a2vis();
@@ -264,18 +271,19 @@ function setupForm(){
   g('gAsa',{list:()=>['1','2','3','4','5','Donor'],get:()=>String(F.asa||''),set:v=>F.asa=v});
   g('gPri',{list:()=>['Day case','Routine','Urgent','Emergency'],get:()=>F.pri,set:v=>F.pri=v});
   g('gSpec',{list:()=>opts().spec,top:8,allowNew:true,get:()=>F.spec,set:v=>{F.spec=v;drawOps()}});
-  g('gA1',{list:()=>opts().a1,top:6,allowNew:true,get:()=>F.a1,set:v=>F.a1=v});
+  g('gA1',{list:()=>opts().a1,top:6,allowNew:true,get:()=>F.a1,set:v=>{F.a1=v;a2vis();redraw.forEach(f=>f!==redrawA1&&f())}}); const redrawA1=redraw[redraw.length-1];
+  g('gMt',{list:()=>['TIVA','Volatile'],label:v=>MT[v],get:()=>F.mt,set:v=>F.mt=v});
   g('gA2',{list:()=>opts().a2,top:8,allowNew:true,get:()=>F.a2,set:v=>{F.a2=v;if(!v){F.a2s='';F.a2t=''}a2vis()}});
   g('gA2s',{list:()=>['Solo','Supervised','Observed'],get:()=>F.a2s,set:v=>F.a2s=v});
   g('gA2t',{list:()=>['Ultrasound guided','Anatomical','Nerve simulator'],get:()=>F.a2t,set:v=>F.a2t=v});
-  g('gProc',{list:()=>opts().proc,top:8,multi:true,allowNew:true,get:()=>F.procs.map(p=>p[0]),set:v=>{F.procs=v.map(n=>F.procs.find(p=>p[0]===n)||[n,'',''])}});
+  g('gProc',{list:()=>opts().proc,top:8,multi:true,allowNew:true,get:()=>F.procs.map(p=>p[0]),set:v=>{F.procs=v.map(n=>F.procs.find(p=>p[0]===n)||[n,'','']); if(isGA(F)&&!F.mt&&v.some(n=>/^(tci|tiva)$/i.test(n))){F.mt='TIVA';redraw.forEach(f=>f())}}});
   const durs=[[30,'30 min'],[45,'45 min'],[60,'1 h'],[90,'1½ h'],[120,'2 h'],[180,'3 h'],[240,'4 h']];
   durs.forEach(([m,l])=>{const b=document.createElement('button');b.type='button';b.className='chip';b.textContent=l;b.onclick=()=>{if(!$('fStart').value){$('fStart').value='09:00'}$('fEnd').value=addMin($('fStart').value,m)};$('gDur').appendChild(b)});
   $('fOp').oninput=()=>{F.op=$('fOp').value;drawOps()};
   $('fOp').onchange=()=>{const x=opts().opMap.get(normOp($('fOp').value)); if(x) smartFill(x)};
   $('fNotes').oninput=idCheck; $('fIncd').oninput=idCheck;
   $('fDate').onchange=()=>{ if(!F.id&&!$('fStart').value){const b=blank({d:$('fDate').value});$('fStart').value=b.s} };
-  $('fillUndo').onclick=()=>{F.a1='';F.a2='';F.a2s='';F.a2t='';F.procs=[];if(fillSnapshot){F.spec=fillSnapshot.spec;F.pri=fillSnapshot.pri}$('fillNote').hidden=true;redraw.forEach(f=>f());a2vis()};
+  $('fillUndo').onclick=()=>{F.a1='';F.mt='';F.a2='';F.a2s='';F.a2t='';F.procs=[];if(fillSnapshot){F.spec=fillSnapshot.spec;F.pri=fillSnapshot.pri}$('fillNote').hidden=true;redraw.forEach(f=>f());a2vis()};
   $('cancelEdit').onclick=()=>loadForm(blank());
   $('save').onclick=save;
   $('del').onclick=()=>{ if(!delArmed){delArmed=true;$('del').textContent='Tap again to delete';return}
@@ -284,7 +292,7 @@ function setupForm(){
 function save(){
   F.d=$('fDate').value; F.s=$('fStart').value; F.e=$('fEnd').value; F.op=$('fOp').value.replace(/\s+/g,' ').trim();
   const a=$('fAge').value; F.age=a===''?'':Math.round(+a); F.notes=$('fNotes').value.trim(); F.inc=$('fInc').value; F.incd=$('fIncd').value.trim();
-  const miss=[]; if(!F.d)miss.push('date'); if(!F.op)miss.push('operation'); if(!F.a1&&!F.a2)miss.push('anaesthetic technique');
+  const miss=[]; if(!F.d)miss.push('date'); if(!F.op)miss.push('operation'); if(!F.a1&&!F.a2)miss.push('anaesthetic technique'); if(isGA(F)&&!F.mt&&(!F.id||F._copy))miss.push('maintenance (TIVA or volatile)');
   if(miss.length){$('formErr').textContent='Add the '+miss.join(', ')+' before saving.';$('formErr').hidden=false;return}
   $('formErr').hidden=true;
   const editing=!!F.id&&!F._copy, c=JSON.parse(JSON.stringify(F)); delete c._copy;
@@ -304,7 +312,7 @@ function drawList(){
   let h='', day='';
   all.slice(0,shown).forEach(c=>{
     if(c.d!==day){day=c.d;h+='<div class="day">'+esc(niceDate(day))+'</div>'}
-    const tech=[c.a1,c.a2].concat((c.procs||[]).map(p=>p[0])).filter(Boolean).join(' · ');
+    const tech=[c.a1,MT[maint(c)],c.a2].concat((c.procs||[]).map(p=>p[0])).filter(Boolean).join(' · ');
     const time=flagged(c)?'<span class="flag">'+(c.s||'no time')+' · no duration</span>':esc(c.s+'–'+c.e);
     h+='<button type="button" class="case" data-id="'+esc(c.id)+'"><div class="op">'+esc(c.op||'(no operation)')+'</div><div class="m">'+
       esc([c.age!==''&&c.age!=null?c.age+(c.sex||''):c.sex,c.asa?'ASA '+c.asa:'',c.pri,c.spec,c.sup].filter(Boolean).join(' · '))+'</div><div class="m">'+esc(tech)+'</div><div class="m">'+time+
@@ -331,8 +339,9 @@ function setRange(r){
   if(r==='This year'){$('rFrom').value=t.slice(0,4)+'-01-01';$('rTo').value=t}
   else if(r==='12 months'){const d=new Date();d.setFullYear(d.getFullYear()-1);d.setDate(d.getDate()+1);$('rFrom').value=iso(d);$('rTo').value=t}
   else if(r==='5 years'){const d=new Date();d.setFullYear(d.getFullYear()-5);d.setDate(d.getDate()+1);$('rFrom').value=iso(d);$('rTo').value=t}
+  else if(r==='Last year'){const y=+t.slice(0,4)-1;$('rFrom').value=y+'-01-01';$('rTo').value=y+'-12-31'}
   else if(r==='All'){const a=cases();$('rFrom').value=a.length?a[a.length-1].d:t;$('rTo').value=a.length&&a[0].d>t?a[0].d:t}
-  drawSummary();
+  syncDates(); drawSummary();
 }
 const inRange=()=>{const f=$('rFrom').value||'0000',t=$('rTo').value||'9999';return cases().filter(c=>c.d>=f&&c.d<=t)};
 const ageBand=a=>a===''||a==null?'Not recorded':a<1?'Under 1':a<=5?'1 to 5':a<=15?'6 to 15':a<80?'16 to 79':'80 and over';
@@ -342,7 +351,7 @@ function tally(list,get,order){
 }
 function summarise(){
   const L=inRange(), n=L.length; let m=0; L.forEach(c=>{const a=mins(c.s),b=mins(c.e); if(a!=null&&b!=null&&b>a)m+=b-a});
-  const blocks=L.filter(c=>c.a2);
+  const blocks=L.filter(c=>c.a2), gas=L.filter(isGA);
   const S={n,hours:Math.round(m/60),solo:L.filter(c=>c.sup==='Consultant Solo').length,teach:L.filter(c=>/^Teaching/.test(c.sup||'')).length,
     from:$('rFrom').value,to:$('rTo').value,sections:[
     ['Speciality',tally(L,c=>[c.spec])],
@@ -351,8 +360,9 @@ function summarise(){
     ['Age',tally(L,c=>[ageBand(c.age)],['Under 1','1 to 5','6 to 15','16 to 79','80 and over','Not recorded'])],
     ['Supervision',tally(L,c=>[c.sup])],
     ['Primary technique',tally(L,c=>[c.a1])],
+    ['GA maintenance (of '+gas.length+' general anaesthetics)',tally(gas,c=>[MT[maint(c)]||'Not recorded'],['TIVA / TCI','Volatile','Not recorded']),gas.length],
     ['Regional and neuraxial',tally(L,c=>[c.a2])],
-    ['Block operator',tally(blocks,c=>[c.a2s||'Not recorded'])],
+    ['Block operator (of '+blocks.length+' blocks)',tally(blocks,c=>[c.a2s||'Not recorded']),blocks.length],
     ['Procedures and monitoring',tally(L,c=>(c.procs||[]).map(p=>p[0]))],
     ['Most frequent operations',tally(L,c=>[(opts().opMap.get(normOp(c.op))||{label:c.op}).label]).slice(0,15)],
     ['Cases by year',tally(L,c=>[c.d.slice(0,4)]).sort((a,b)=>a[0]<b[0]?-1:1)]
@@ -361,38 +371,61 @@ function summarise(){
   return S;
 }
 function drawSummary(){
-  const S=summarise(), pc=x=>{if(!S.n||!x)return '0%';const r=Math.round(100*x/S.n);return r<1?'<1%':r+'%'};
+  const S=summarise(), pc=(x,d)=>{d=d||S.n;if(!d||!x)return '0%';const r=Math.round(100*x/d);return r<1?'<1%':r+'%'};
   $('tiles').innerHTML=[[S.n.toLocaleString('en-GB'),'cases'],[S.hours.toLocaleString('en-GB'),'hours with times logged'],[pc(S.solo),'consultant solo ('+S.solo+')'],[pc(S.teach),'teaching ('+S.teach+')']]
     .map(t=>'<div class="tile"><b>'+t[0]+'</b><span>'+t[1]+'</span></div>').join('');
   let h='';
-  S.sections.forEach(([title,rows])=>{const max=Math.max.apply(null,rows.map(r=>r[1]));
-    h+='<div class="card"><h2>'+esc(title)+'</h2><div class="bars">'+rows.map(r=>'<div class="n">'+esc(r[0])+'</div><div class="t" title="'+esc(r[0])+': '+r[1]+'"><i style="width:'+(100*r[1]/max).toFixed(1)+'%"></i></div><div class="v"><b>'+r[1]+'</b> '+pc(r[1])+'</div>').join('')+'</div></div>'});
+  S.sections.forEach(([title,rows,den])=>{const max=Math.max.apply(null,rows.map(r=>r[1]));
+    h+='<div class="card"><h2>'+esc(title)+'</h2><div class="bars">'+rows.map(r=>'<div class="n">'+esc(r[0])+'</div><div class="t" title="'+esc(r[0])+': '+r[1]+'"><i style="width:'+(100*r[1]/max).toFixed(1)+'%"></i></div><div class="v"><b>'+r[1]+'</b> '+pc(r[1],den)+'</div>').join('')+'</div></div>'});
   if(S.incidents.length) h+='<div class="card"><h2>Incidents and notes of concern</h2>'+S.incidents.map(c=>'<div class="m"><b>'+esc(niceDate(c.d))+'</b> '+esc(c.op)+': '+esc([c.inc,c.incd].filter(Boolean).join(', '))+'</div>').join('')+'</div>';
   $('sections').innerHTML=h||'<div class="note">No cases in this period.</div>';
 }
 function summaryText(){
   const S=summarise(); let t='Anaesthetic logbook summary\n'+niceDate(S.from)+' to '+niceDate(S.to)+'\n\nCases: '+S.n+'\nHours (cases with times): '+S.hours+'\nConsultant solo: '+S.solo+'\nTeaching: '+S.teach+'\n';
-  S.sections.forEach(([title,rows])=>{t+='\n'+title+'\n'+rows.map(r=>'  '+r[0]+': '+r[1]+(S.n?' ('+Math.round(100*r[1]/S.n)+'%)':'')).join('\n')+'\n'});
-  if(S.incidents.length) t+='\nIncidents\n'+S.incidents.map(c=>'  '+c.d+' '+c.op+': '+[c.inc,c.incd].filter(Boolean).join(', ')).join('\n')+'\n';
+  S.sections.forEach(([title,rows,den])=>{const d=den||S.n;t+='\n'+title+'\n'+rows.map(r=>'  '+r[0]+': '+r[1]+(d?' ('+Math.round(100*r[1]/d)+'%)':'')).join('\n')+'\n'});
+  if(S.incidents.length) t+='\nIncidents\n'+S.incidents.map(c=>'  '+uk(c.d)+' '+c.op+': '+[c.inc,c.incd].filter(Boolean).join(', ')).join('\n')+'\n';
   return t;
 }
 function summaryCsv(){
-  const S=summarise(); const rows=[['Section','Item','Cases','Percent of cases'],['Period','From '+S.from+' to '+S.to,S.n,''],['Totals','Hours (cases with times)',S.hours,''],['Totals','Consultant solo',S.solo,''],['Totals','Teaching',S.teach,'']];
-  S.sections.forEach(([title,r])=>r.forEach(x=>rows.push([title,x[0],x[1],S.n?Math.round(100*x[1]/S.n):''])));
+  const S=summarise(); const rows=[['Section','Item','Cases','Percent of cases'],['Period','From '+uk(S.from)+' to '+uk(S.to),S.n,''],['Totals','Hours (cases with times)',S.hours,''],['Totals','Consultant solo',S.solo,''],['Totals','Teaching',S.teach,'']];
+  S.sections.forEach(([title,r,den])=>r.forEach(x=>rows.push([title,x[0],x[1],(den||S.n)?Math.round(100*x[1]/(den||S.n)):''])));
   return rows.map(r=>r.map(q).join(',')).join('\r\n')+'\r\n';
 }
 function casesCsv(){return toCsv(inRange(),false)}
 async function saveFile(name,data){download(name,data);toast('Saved '+name)}
 async function copy(text,msg){ try{await navigator.clipboard.writeText(text);toast(msg||'Copied')}catch(e){toast('Copying was blocked. Use the download button.')} }
 function setupSummary(){
-  chipGroup($('gRange'),{list:()=>['This year','12 months','5 years','All'],get:()=>range,set:v=>{if(v)setRange(v)}});
-  $('rFrom').onchange=$('rTo').onchange=()=>{range='';drawSummary()};
+  chipGroup($('gRange'),{list:()=>['This year','Last year','12 months','5 years','All'],get:()=>range,set:v=>{if(v)setRange(v)}});
+  $('rFrom').onchange=$('rTo').onchange=()=>{range='';syncDates();drawSummary()};
+  $('rpOpen').onclick=openReport; $('rpClose').onclick=()=>{$('report').hidden=true;document.body.classList.remove('rp')};
+  $('rpPrint').onclick=()=>window.print(); $('rpSave').onclick=()=>giveFile('logbook-appraisal-report_'+$('rFrom').value+'_to_'+$('rTo').value+'.html',reportDoc(),'text/html');
   const stamp=()=>($('rFrom').value+'_to_'+$('rTo').value);
   $('dlCsv').onclick=()=>saveFile('anaesthetic-logbook_'+stamp()+'.csv',casesCsv());
   $('dlSum').onclick=()=>saveFile('logbook-summary_'+stamp()+'.csv',summaryCsv());
   $('cpSum').onclick=()=>copy(summaryText(),'Summary copied');
   $('cpCsv').onclick=()=>copy(casesCsv(),'Cases copied as CSV');
 }
+
+/* ---------- appraisal report ---------- */
+function reportBody(){
+  const S=summarise(), L=inRange().slice().reverse(), pc=(x,d)=>{d=d||S.n;return d?Math.round(100*x/d)+'%':''};
+  let h='<h1>Anaesthetic logbook: appraisal report</h1><p class="sub">'+esc(niceDate(S.from))+' to '+esc(niceDate(S.to))+' · generated '+esc(niceDate(today()))+'</p>';
+  h+='<table class="tot"><tr><th>Cases</th><th>Hours (cases with times)</th><th>Consultant solo</th><th>Teaching</th></tr><tr><td>'+S.n+'</td><td>'+S.hours+'</td><td>'+S.solo+' ('+pc(S.solo)+')</td><td>'+S.teach+' ('+pc(S.teach)+')</td></tr></table>';
+  h+='<h2>Summary</h2><div class="cols">'+S.sections.map(([t,rows,den])=>'<table class="sum"><tr><th>'+esc(t)+'</th><th>Cases</th><th>%</th></tr>'+rows.map(r=>'<tr><td>'+esc(r[0])+'</td><td>'+r[1]+'</td><td>'+pc(r[1],den)+'</td></tr>').join('')+'</table>').join('')+'</div>';
+  h+='<h2>Incidents</h2>'+(S.incidents.length?'<table class="cases"><tr><th>Date</th><th>Operation</th><th>Incident</th><th>Details</th></tr>'+S.incidents.map(c=>'<tr><td>'+uk(c.d)+'</td><td>'+esc(c.op)+'</td><td>'+esc(c.inc)+'</td><td>'+esc(c.incd)+'</td></tr>').join('')+'</table>':'<p>None recorded in this period.</p>');
+  h+='<h2>All cases ('+L.length+')</h2><table class="cases"><thead><tr><th>#</th><th>Date</th><th>Time</th><th>Age</th><th>Sex</th><th>ASA</th><th>Priority</th><th>Speciality</th><th>Operation</th><th>Anaesthetic</th><th>Regional</th><th>Procedures</th><th>Supervision</th><th>Notes</th></tr></thead><tbody>'+
+    L.map((c,i)=>'<tr><td>'+(i+1)+'</td><td>'+uk(c.d)+'</td><td>'+esc(c.s&&c.e&&c.s!==c.e?c.s+'–'+c.e:c.s||'')+'</td><td>'+esc(c.age)+'</td><td>'+esc(c.sex)+'</td><td>'+esc(c.asa)+'</td><td>'+esc(c.pri)+'</td><td>'+esc(c.spec)+'</td><td>'+esc(c.op)+'</td><td>'+esc([c.a1,MT[maint(c)]].filter(Boolean).join(', '))+'</td><td>'+esc([c.a2,c.a2s,c.a2t].filter(Boolean).join(', '))+'</td><td>'+esc((c.procs||[]).map(p=>p[0]+(p[1]?' ('+p[1]+')':'')).join(', '))+'</td><td>'+esc(c.sup)+'</td><td>'+esc([c.notes,c.inc,c.incd].filter(Boolean).join('; '))+'</td></tr>').join('')+'</tbody></table>';
+  return h;
+}
+const REPORT_CSS='.rpt{font:12px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#111}.rpt h1{font-size:20px;margin:0 0 2px}.rpt .sub{margin:0 0 12px;color:#444}.rpt h2{font-size:14px;margin:18px 0 6px;border-bottom:1px solid #999;padding-bottom:2px}.rpt table{border-collapse:collapse;margin:0 0 10px}.rpt th,.rpt td{border:1px solid #bbb;padding:2px 5px;text-align:left;vertical-align:top}.rpt th{background:#eee}.rpt .cols{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start}.rpt .sum td:nth-child(n+2),.rpt .tot td{text-align:right;font-variant-numeric:tabular-nums}.rpt .cases{width:100%;font-size:10.5px}.rpt .cases thead{display:table-header-group}.rpt tr,.rpt .sum,.rpt .tot{break-inside:avoid}.rpt .cases td:nth-child(2),.rpt .cases td:nth-child(3){white-space:nowrap}@page{size:A4 landscape;margin:10mm}';
+function reportDoc(){return '<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Anaesthetic logbook appraisal report '+uk($('rFrom').value)+' to '+uk($('rTo').value)+'</title><style>body{margin:12px;background:#fff}'+REPORT_CSS+'</style></head><body><div class="rpt">'+reportBody()+'</div></body></html>'}
+function openReport(){ $('rpBody').innerHTML='<style>'+REPORT_CSS+'</style><div class="rpt">'+reportBody()+'</div>'; $('report').hidden=false; document.body.classList.add('rp'); $('report').scrollTop=0 }
+async function giveFile(name,text,type){
+  try{ const f=new File([text],name,{type}); if(navigator.canShare&&navigator.canShare({files:[f]})){await navigator.share({files:[f],title:name});return true} }catch(e){ if(e&&e.name==='AbortError') return false }
+  download(name,text); return true;
+}
+function syncDates(){ document.querySelectorAll('.datebox').forEach(b=>{const i=b.querySelector('input'); b.querySelector('span').textContent=i.value?niceDate(i.value):'Choose a date'}) }
+function setupDates(){ document.querySelectorAll('.datebox input').forEach(i=>{i.addEventListener('input',syncDates);i.addEventListener('change',syncDates);i.addEventListener('click',()=>{try{i.showPicker&&i.showPicker()}catch(e){}})}); syncDates() }
 
 /* ---------- shell ---------- */
 let toastT; function toast(m){const t=$('toast');t.textContent=m;t.classList.add('on');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('on'),2600)}
@@ -405,8 +438,8 @@ function route(){
 }
 function refresh(){ const v=location.hash.slice(1); if(v==='cases'){yearOptions();drawList()} else if(v==='summary') drawSummary(); else if(v!=='backup'&&!F.id){redraw.forEach(f=>f());drawOps()} }
 async function start(){
-  try{ all=(await idb.get('cases'))||[]; dirty=(await idb.get('dirty'))||{}; meta=Object.assign(meta,(await idb.get('meta'))||{}); cfg=(await idb.get('cfg'))||null }catch(e){ toast('This browser is blocking storage, so cases cannot be kept. Leave private browsing.') }
-  F=blank(); setupForm(); setupList(); setupSummary(); setupBackup(); loadForm(blank()); setRange('12 months'); route(); syncLabel();
+  try{ all=(await idb.get('cases'))||[]; dirty=(await idb.get('dirty'))||{}; meta=Object.assign(meta,(await idb.get('meta'))||{}); cfg=(await idb.get('cfg'))||null; if(meta.v!==2){meta.v=2;meta.sha='';meta.etag=''} }catch(e){ toast('This browser is blocking storage, so cases cannot be kept. Leave private browsing.') }
+  F=blank(); setupForm(); setupList(); setupSummary(); setupBackup(); setupDates(); loadForm(blank()); setRange('12 months'); route(); syncLabel();
   window.addEventListener('hashchange',route);
   window.addEventListener('online',()=>sync(true));
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&cfg&&Date.now()-meta.lastSync>5*60e3)sync(true)});

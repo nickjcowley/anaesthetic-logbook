@@ -23,7 +23,7 @@
   <div class="banner" id="editBanner" hidden><span id="editText"></span><button class="linkbtn" id="cancelEdit" type="button">Cancel</button></div>
   <div class="card">
     <div class="row">
-      <div class="f" style="flex-basis:100%"><label class="l" for="fDate">Date</label><input type="date" id="fDate"></div>
+      <div class="f" style="flex-basis:100%"><label class="l" for="fDate">Date</label><div class="datebox"><span></span><input type="date" id="fDate"></div></div>
       <div class="f"><label class="l" for="fStart">Start</label><input type="time" id="fStart"></div>
       <div class="f"><label class="l" for="fEnd">End</label><input type="time" id="fEnd"></div>
     </div>
@@ -48,6 +48,7 @@
   <div class="card">
     <h2>Anaesthetic</h2>
     <div class="g"><span class="l">Primary technique</span><div class="chips" id="gA1"></div></div>
+    <div class="g" id="mtBox" hidden><span class="l">Maintenance</span><div class="chips" id="gMt"></div></div>
     <div class="g"><span class="l">Regional or neuraxial</span><div class="chips" id="gA2"></div></div>
     <div class="g" id="a2extra" hidden><span class="l">Block operator and technique</span><div class="chips" id="gA2s"></div><div class="chips" id="gA2t"></div></div>
     <div class="g"><span class="l">Procedures and monitoring</span><div class="chips" id="gProc"></div></div>
@@ -75,14 +76,19 @@
 <section class="view" id="v-summary">
   <div class="card">
     <div class="g"><span class="l">Period</span><div class="chips" id="gRange"></div></div>
-    <div class="row"><div class="f"><label class="l" for="rFrom">From</label><input type="date" id="rFrom"></div><div class="f"><label class="l" for="rTo">To</label><input type="date" id="rTo"></div></div>
+    <div class="row"><div class="f"><label class="l" for="rFrom">From</label><div class="datebox"><span></span><input type="date" id="rFrom"></div></div><div class="f"><label class="l" for="rTo">To</label><div class="datebox"><span></span><input type="date" id="rTo"></div></div></div>
   </div>
   <div class="tiles" id="tiles"></div>
   <div id="sections" style="display:flex;flex-direction:column;gap:12px"></div>
   <div class="card">
     <h2>Export this period</h2>
     <div class="actions"><button class="btn" id="dlCsv" type="button">Download cases (CSV)</button><button class="btn" id="dlSum" type="button">Download summary (CSV)</button><button class="btn" id="cpSum" type="button">Copy summary as text</button><button class="btn" id="cpCsv" type="button">Copy cases as CSV</button></div>
-    <div class="note">The case file uses the same 26 columns as your current logbook, so it opens in the same places.</div>
+    <div class="note">The case file keeps your original 26 columns and adds Maintenance at the end. Dates are written day/month/year.</div>
+  </div>
+  <div class="card">
+    <h2>Appraisal report</h2>
+    <div class="note">The summary for this period followed by a list of every case, laid out for printing or saving as a PDF.</div>
+    <div class="actions"><button class="btn primary" id="rpOpen" type="button">Create report</button></div>
   </div>
 </section>
 <section class="view" id="v-backup">
@@ -113,10 +119,11 @@
     <label class="l" for="rsFile">Choose a CSV file</label><input type="file" id="rsFile" accept=".csv,text/csv,text/comma-separated-values">
     <div class="g" id="rsConfirm" hidden><div id="rsText"></div><div class="actions"><button class="btn primary" id="rsYes" type="button">Load this file</button><button class="btn" id="rsNo" type="button">Cancel</button></div></div>
   </div>
-  <div class="note">Version 1.0. Cases are stored on this phone and in the places above, nowhere else.</div>
+  <div class="note">Version 1.1. Cases are stored on this phone and in the places above, nowhere else.</div>
 </section>
 </main>
 <nav><a href="#new" data-v="new">New case</a><a href="#cases" data-v="cases">Cases</a><a href="#summary" data-v="summary">Summary</a><a href="#backup" data-v="backup">Backup</a></nav>
+<div id="report" hidden><div class="rbar"><button class="btn small primary" id="rpPrint" type="button">Print or save as PDF</button><button class="btn small" id="rpSave" type="button">Save as file</button><button class="btn small" id="rpClose" type="button">Close</button></div><div id="rpBody"></div></div>
 <div id="toast" role="status"></div>
 
 <script src="app.js"></script>

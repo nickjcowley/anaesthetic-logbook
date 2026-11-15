@@ -83,3 +83,17 @@ details>summary{cursor:pointer;font-weight:500;padding:6px 0}
 input[type=password]{width:100%;min-height:44px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
 input[type=file]{width:100%;font-size:14px}
 button:disabled{opacity:.6}
+.datebox{position:relative;min-height:44px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);display:flex;align-items:center}
+.datebox input{position:absolute;inset:0;width:100%;height:100%;min-height:0;opacity:0;cursor:pointer;border:0;padding:0}
+.datebox:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+#report{position:fixed;inset:0;z-index:20;background:#fff;color:#111;overflow:auto;padding:0 12px 24px;color-scheme:light}
+#report .rbar{position:sticky;top:0;background:#fff;display:flex;gap:8px;flex-wrap:wrap;padding:calc(10px + env(safe-area-inset-top)) 0 10px;border-bottom:1px solid #ccc;margin-bottom:12px}
+#report .btn{background:#fff;color:#111;border-color:#bbb}
+#report .btn.primary{background:#0e6f6a;border-color:#0e6f6a;color:#fff}
+#rpBody{overflow-x:auto}
+@media print{
+  html,body{height:auto;display:block;background:#fff}
+  body.rp>header,body.rp>main,body.rp>nav,#toast,#report .rbar{display:none!important}
+  #report{position:static;overflow:visible;padding:0}
+  #rpBody{overflow:visible}
+}
