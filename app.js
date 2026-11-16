@@ -9,8 +9,10 @@ const mins=t=>t?(+t.slice(0,2))*60+(+t.slice(3,5)):null;
 const addMin=(t,m)=>{const x=((mins(t)+m)%1440+1440)%1440;return pad(Math.floor(x/60))+':'+pad(x%60)};
 const normOp=s=>String(s||'').toLowerCase().replace(/\s+/g,' ').trim();
 const uk=d=>d?d.slice(8,10)+'/'+d.slice(5,7)+'/'+d.slice(0,4):'';
-const caseMins=c=>{const a=mins(c.s),b=mins(c.e); if(a==null||b==null) return null; let d=b-a; if(d<0&&a>=17*60&&b<=10*60) d+=1440; return d>0&&d<=16*60?d:null};
-const exactTime=c=>!!(c.h&&(c.h.tAn||c.h.tAnRoom)&&(c.h.tRec||c.h.tEnd));
+/* Timing analyses use theatre-record times only, never the logged start/end. */
+const span=(a,b,max)=>{a=mins(a);b=mins(b); if(a==null||b==null) return null; let d=b-a; if(d<0&&a>=17*60&&b<=10*60) d+=1440; return d>0&&d<=max?d:null};
+const indMin=c=>c.h?span(c.h.tAnRoom,c.h.tTh,120):null;
+const suiteMin=c=>c.h?span(c.h.tAnRoom||c.h.tAn,c.h.tRec||c.h.tEnd,16*60):null;
 const isGA=c=>/^GA/i.test(c.a1||'');
 const maint=c=>c.mt||(isGA(c)&&(c.procs||[]).some(p=>/^(tci|tiva)$/i.test(p[0]))?'TIVA':'');
 const MT={TIVA:'TIVA / TCI',Volatile:'Volatile'};
@@ -412,7 +414,7 @@ function loadForm(c){
   redraw.forEach(f=>f()); drawOps(); a2vis(); drawHospCard();
 }
 function drawHospCard(){ const h=F.h; $('hospCard').hidden=!h; if(!h) return;
-  $('hospBody').innerHTML=HOSP_FIELDS.filter(f=>f[0]!=='hk'&&h[f[0]]).map(f=>'<div class="kv"><span>'+esc(HOSP_SHOW[f[0]]||f[1])+'</span><b>'+esc(h[f[0]])+'</b></div>').join('') }
+  $('hospBody').innerHTML=(indMin(F)!=null?'<div class="kv"><span>Induction: anaesthetic room to theatre</span><b>'+indMin(F)+' min</b></div>':'')+HOSP_FIELDS.filter(f=>f[0]!=='hk'&&h[f[0]]).map(f=>'<div class="kv"><span>'+esc(HOSP_SHOW[f[0]]||f[1])+'</span><b>'+esc(h[f[0]])+'</b></div>').join('') }
 function a2vis(){ $('a2extra').hidden=!F.a2; $('mtBox').hidden=!isGA(F); if(!isGA(F)) F.mt='' }
 function drawGrp(){ const a=autoGroup({op:$('fOp').value,spec:F.spec}), v=F.grp||a; $('fGrp').innerHTML=(v?'':'<option value="">Set from the operation</option>')+GROUPS.map(x=>'<option'+(x===v?' selected':'')+'>'+esc(x)+'</option>').join('') }
 function drawOps(){
@@ -486,7 +488,7 @@ function drawList(){
   all.slice(0,shown).forEach(c=>{
     if(c.d!==day){day=c.d;h+='<div class="day">'+esc(niceDate(day))+'</div>'}
     const tech=[c.a1,MT[maint(c)],c.a2].concat((c.procs||[]).map(p=>p[0])).filter(Boolean).join(' · ');
-    const cm=caseMins(c), time=flagged(c)||cm==null?'<span class="flag">'+esc(c.s||'no time')+' · no duration</span>':esc(c.s+'–'+c.e+' · '+cm+' min'+(exactTime(c)?'':' (logged)'));
+    const im=indMin(c), time=(flagged(c)?'<span class="flag">'+esc(c.s||'no time')+' · no duration</span>':esc(c.s+'–'+c.e))+(im!=null?' · induction '+im+' min':'');
     h+='<button type="button" class="case" data-id="'+esc(c.id)+'"><div class="op">'+esc(c.op||'(no operation)')+'</div><div class="m">'+
       esc([c.age!==''&&c.age!=null?c.age+(c.sex||''):c.sex,c.asa?'ASA '+c.asa:'',c.pri,c.spec,c.sup].filter(Boolean).join(' · '))+'</div><div class="m">'+esc(tech)+'</div><div class="m">'+time+
       (c.h?' · theatre record':'')+(c.notes?' · '+esc(c.notes):'')+(c.inc?' · <span class="flag">'+esc(c.inc)+'</span>':'')+'</div></button>';
@@ -523,9 +525,9 @@ function tally(list,get,order){
   let r=[...m]; if(order) r.sort((a,b)=>order.indexOf(a[0])-order.indexOf(b[0])); else r.sort((a,b)=>b[1]-a[1]); return r;
 }
 function summarise(){
-  const L=inRange(), n=L.length; let m=0; L.forEach(c=>{const d=caseMins(c); if(d)m+=d});
+  const L=inRange(), n=L.length; let m=0,mc=0; L.forEach(c=>{const d=suiteMin(c); if(d){m+=d;mc++}});
   const blocks=L.filter(c=>c.a2), gas=L.filter(isGA), HL=L.filter(c=>c.h), rec=k=>HL.filter(c=>c.h[k]==='Yes'||c.h[k]==='No');
-  const S={n,hours:Math.round(m/60),solo:L.filter(c=>c.sup==='Consultant Solo').length,teach:L.filter(c=>/^Teaching/.test(c.sup||'')).length,
+  const S={n,hours:Math.round(m/60),hoursN:mc,solo:L.filter(c=>c.sup==='Consultant Solo').length,teach:L.filter(c=>/^Teaching/.test(c.sup||'')).length,
     from:$('rFrom').value,to:$('rTo').value,sections:[
     ['Speciality',tally(L,c=>[c.spec])],
     ['Operation group',tally(L,c=>[grp(c)])],
@@ -556,16 +558,18 @@ function summaryTables(L,HL){
   if(gas.length){ const ys=[...new Set(gas.map(c=>c.d.slice(0,4)))].sort();
     T.push({title:'GA maintenance by year',cols:['Year','General anaesthetics','TIVA / TCI','Volatile','Not recorded','TIVA % of all GAs','TIVA % where recorded'],bar:true,note:'"Where recorded" is shown only for years where at least half of GAs have maintenance recorded. Before theatre records, only TCI use was logged, so earlier years understate volatile use.',
       rows:ys.map(y=>{const g=gas.filter(c=>c.d.startsWith(y)), t=g.filter(c=>maint(c)==='TIVA').length, v=g.filter(c=>maint(c)==='Volatile').length; return [y,g.length,t,v,g.length-t-v,Math.round(100*t/g.length)+'%',(t+v)*2>=g.length?Math.round(100*t/(t+v))+'%':'–']})}) }
-  const timed=L.filter(c=>caseMins(c)!=null);
+  const withT=HL.filter(c=>c.h.tAnRoom&&c.h.tTh), timed=withT.filter(c=>indMin(c)!=null);
   if(timed.length){
     const q=(a,p)=>{const s=a.slice().sort((x,y)=>x-y),i=(s.length-1)*p,lo=Math.floor(i),hi=Math.ceil(i);return s[lo]+(s[hi]-s[lo])*(i-lo)};
-    const row=(k,cs)=>{const m=cs.map(caseMins);return [k,cs.length,Math.round(q(m,.5)),Math.round(q(m,.25))+'–'+Math.round(q(m,.75)),(m.reduce((a,x)=>a+x,0)/60).toFixed(1)]};
+    const row=(k,cs)=>{const m=cs.map(indMin);return [k,cs.length,Math.round(q(m,.5)),Math.round(q(m,.25))+'–'+Math.round(q(m,.75)),Math.min.apply(null,m)+'–'+Math.max.apply(null,m)]};
+    const note='Induction time is entering the anaesthetic room to entering theatre, from hospital theatre records only; your own logged times are never used. '+timed.length+' of '+HL.length+' cases with a theatre record have both times'+(withT.length>timed.length?'; '+(withT.length-timed.length)+' implausible values (zero, negative or over 2 hours) are left out':'')+'. Middle half is the 25th to 75th centile.';
+    const cols=k=>[k,'Cases','Median minutes','Middle half (min)','Range (min)'];
+    T.push({title:'Induction time overall',cols:cols(''),note,rows:[row('All cases',timed)].concat(['TIVA','Volatile'].map(k=>[MT[k],timed.filter(c=>isGA(c)&&maint(c)===k)]).filter(x=>x[1].length).map(([k,cs])=>row('GA, '+k,cs))).concat([['GA with a regional block',timed.filter(c=>isGA(c)&&c.a2)],['Spinal or regional without GA',timed.filter(c=>!isGA(c)&&(c.a2||/spinal/i.test(c.a1)))]].filter(x=>x[1].length).map(([k,cs])=>row(k,cs)))});
     const grp2=new Map(); timed.forEach(c=>{const k=grp(c)||'Not grouped'; if(!grp2.has(k))grp2.set(k,[]); grp2.get(k).push(c)});
-    const ex=timed.filter(exactTime).length, note='Anaesthetic time is anaesthesia start to into recovery from the theatre record for '+ex+' of '+timed.length+' timed cases; the rest use your logged start and end, which are often rounded. Middle half is the 25th to 75th centile.';
-    T.push({title:'Anaesthetic time by operation group',cols:['Operation group','Timed cases','Median minutes','Middle half (min)','Total hours'],note,rows:[...grp2].sort((a,b)=>b[1].length-a[1].length).map(([k,cs])=>row(k,cs))});
+    T.push({title:'Induction time by operation group',cols:cols('Operation group'),rows:[...grp2].sort((a,b)=>b[1].length-a[1].length).map(([k,cs])=>row(k,cs))});
     const op2=new Map(); timed.forEach(c=>{const k=(opts().opMap.get(normOp(c.op))||{label:c.op}).label; if(!op2.has(k))op2.set(k,[]); op2.get(k).push(c)});
     const ops=[...op2].filter(x=>x[1].length>=5).sort((a,b)=>b[1].length-a[1].length).slice(0,20);
-    if(ops.length) T.push({title:'Anaesthetic time by operation (5 or more timed cases)',cols:['Operation','Timed cases','Median minutes','Middle half (min)','Total hours'],rows:ops.map(([k,cs])=>row(k,cs))});
+    if(ops.length) T.push({title:'Induction time by operation (5 or more cases)',cols:cols('Operation'),rows:ops.map(([k,cs])=>row(k,cs))});
   }
   if(HL.length){
     const by=(f)=>{const m=new Map(); HL.forEach(c=>{const k=f(c)||'Not recorded'; if(!m.has(k))m.set(k,[]); m.get(k).push(c)}); return m};
@@ -592,7 +596,7 @@ function tableHtml(t,screen){
 }
 function drawSummary(){
   const S=summarise(), pc=(x,d)=>{d=d||S.n;if(!d||!x)return '0%';const r=Math.round(100*x/d);return r<1?'<1%':r+'%'};
-  $('tiles').innerHTML=[[S.n.toLocaleString('en-GB'),'cases'],[S.hours.toLocaleString('en-GB'),'hours with times logged'],[pc(S.solo),'consultant solo ('+S.solo+')'],[pc(S.teach),'teaching ('+S.teach+')']]
+  $('tiles').innerHTML=[[S.n.toLocaleString('en-GB'),'cases'],[S.hoursN?S.hours.toLocaleString('en-GB'):'–','theatre hours ('+S.hoursN+' cases with a theatre record)'],[pc(S.solo),'consultant solo ('+S.solo+')'],[pc(S.teach),'teaching ('+S.teach+')']]
     .map(t=>'<div class="tile"><b>'+t[0]+'</b><span>'+t[1]+'</span></div>').join('');
   let h='';
   S.sections.forEach(([title,rows,den])=>{const max=Math.max.apply(null,rows.map(r=>r[1]));
@@ -602,7 +606,7 @@ function drawSummary(){
   $('sections').innerHTML=h||'<div class="note">No cases in this period.</div>';
 }
 function summaryText(){
-  const S=summarise(); let t='Anaesthetic logbook summary\n'+niceDate(S.from)+' to '+niceDate(S.to)+'\n\nCases: '+S.n+'\nHours (cases with times): '+S.hours+'\nConsultant solo: '+S.solo+'\nTeaching: '+S.teach+'\n';
+  const S=summarise(); let t='Anaesthetic logbook summary\n'+niceDate(S.from)+' to '+niceDate(S.to)+'\n\nCases: '+S.n+'\nTheatre hours, anaesthetic room to recovery ('+S.hoursN+' cases with a theatre record): '+S.hours+'\nConsultant solo: '+S.solo+'\nTeaching: '+S.teach+'\n';
   S.sections.forEach(([title,rows,den])=>{t+='\n'+title+'\n'+rows.map(r=>{const d=r[2]||den||S.n;return '  '+r[0]+': '+r[1]+(d?' ('+Math.round(100*r[1]/d)+'%)':'')}).join('\n')+'\n'});
   S.tables.forEach(tb=>{t+='\n'+tb.title+'\n  '+tb.cols.join(' | ')+'\n'+tb.rows.map(r=>'  '+r.join(' | ')).join('\n')+'\n'});
   {const M=mortality(S.from,S.to); if(M.n) t+='\n30-day mortality (hospital theatre records)\n  '+M.d+(M.d===1?' death':' deaths')+' within 30 days of '+M.n+' operations ('+(100*M.d/M.n).toFixed(1)+'%)\n'}
@@ -610,7 +614,7 @@ function summaryText(){
   return t;
 }
 function summaryCsv(){
-  const S=summarise(); const rows=[['Section','Item','Cases','Percent of cases'],['Period','From '+uk(S.from)+' to '+uk(S.to),S.n,''],['Totals','Hours (cases with times)',S.hours,''],['Totals','Consultant solo',S.solo,''],['Totals','Teaching',S.teach,'']];
+  const S=summarise(); const rows=[['Section','Item','Cases','Percent of cases'],['Period','From '+uk(S.from)+' to '+uk(S.to),S.n,''],['Totals','Theatre hours, anaesthetic room to recovery (theatre records)',S.hours,S.hoursN+' cases'],['Totals','Consultant solo',S.solo,''],['Totals','Teaching',S.teach,'']];
   S.sections.forEach(([title,r,den])=>r.forEach(x=>{const d=x[2]||den||S.n;rows.push([title,x[0],x[1],d?Math.round(100*x[1]/d):''])}));
   S.tables.forEach(tb=>{rows.push([tb.title].concat(tb.cols)); tb.rows.forEach(r=>rows.push([tb.title].concat(r)))});
   {const M=mortality(S.from,S.to); if(M.n) rows.push(['30-day mortality (hospital theatre records)','Deaths within 30 days of '+M.n+' operations',M.d,(100*M.d/M.n).toFixed(1)])}
@@ -661,13 +665,13 @@ function setupHospImport(){
 function reportBody(){
   const S=summarise(), L=inRange().slice().reverse(), pc=(x,d)=>{d=d||S.n;return d?Math.round(100*x/d)+'%':''};
   let h='<h1>Anaesthetic logbook: appraisal report</h1><p class="sub">'+esc(niceDate(S.from))+' to '+esc(niceDate(S.to))+' · generated '+esc(niceDate(today()))+'</p>';
-  h+='<table class="tot"><tr><th>Cases</th><th>Hours (cases with times)</th><th>Consultant solo</th><th>Teaching</th></tr><tr><td>'+S.n+'</td><td>'+S.hours+'</td><td>'+S.solo+' ('+pc(S.solo)+')</td><td>'+S.teach+' ('+pc(S.teach)+')</td></tr></table>';
+  h+='<table class="tot"><tr><th>Cases</th><th>Theatre hours (theatre records, '+S.hoursN+' cases)</th><th>Consultant solo</th><th>Teaching</th></tr><tr><td>'+S.n+'</td><td>'+S.hours+'</td><td>'+S.solo+' ('+pc(S.solo)+')</td><td>'+S.teach+' ('+pc(S.teach)+')</td></tr></table>';
   h+='<h2>Summary</h2><div class="cols">'+S.sections.map(([t,rows,den])=>'<table class="sum"><tr><th>'+esc(t)+'</th><th>Cases</th><th>%</th></tr>'+rows.map(r=>'<tr><td>'+esc(r[0])+'</td><td>'+r[1]+'</td><td>'+pc(r[1],r[2]||den)+'</td></tr>').join('')+'</table>').join('')+'</div>';
   {const M=mortality(S.from,S.to); if(M.n) h+='<h2>30-day mortality (hospital theatre records)</h2><p>'+M.d+' death'+(M.d===1?'':'s')+' within 30 days of '+M.n+' operations with at least 30 days of follow-up ('+(100*M.d/M.n).toFixed(1)+'%), from records covering '+esc(M.from.slice(5)+'/'+M.from.slice(0,4))+' to '+esc(M.to.slice(5)+'/'+M.to.slice(0,4))+'. Crude rate, not adjusted for case mix.</p>'}
   if(S.tables.length) h+='<h2>Trends and theatre activity</h2><div class="cols">'+S.tables.map(t=>'<div><b>'+esc(t.title)+'</b>'+tableHtml(t,false)+(t.note?'<div class="tn">'+esc(t.note)+'</div>':'')+'</div>').join('')+'</div>';
   h+='<h2>Incidents</h2>'+(S.incidents.length?'<table class="cases"><tr><th>Date</th><th>Operation</th><th>Incident</th><th>Details</th></tr>'+S.incidents.map(c=>'<tr><td>'+uk(c.d)+'</td><td>'+esc(c.op)+'</td><td>'+esc(c.inc)+'</td><td>'+esc(c.incd)+'</td></tr>').join('')+'</table>':'<p>None recorded in this period.</p>');
   h+='<h2>All cases ('+L.length+')</h2><table class="cases"><thead><tr><th>#</th><th>Date</th><th>Time</th><th>Age</th><th>Sex</th><th>ASA</th><th>Priority</th><th>Speciality</th><th>Operation</th><th>Anaesthetic</th><th>Regional</th><th>Procedures</th><th>Supervision</th><th>Theatre record</th><th>Notes</th></tr></thead><tbody>'+
-    L.map((c,i)=>'<tr><td>'+(i+1)+'</td><td>'+uk(c.d)+'</td><td>'+esc(c.s&&c.e&&c.s!==c.e?c.s+'–'+c.e:c.s||'')+(caseMins(c)!=null?'<br>'+caseMins(c)+' min':'')+'</td><td>'+esc(c.age)+'</td><td>'+esc(c.sex)+'</td><td>'+esc(c.asa)+'</td><td>'+esc(c.pri)+'</td><td>'+esc(c.spec)+'</td><td>'+esc(c.op)+'</td><td>'+esc([c.a1,MT[maint(c)]].filter(Boolean).join(', '))+'</td><td>'+esc([c.a2,c.a2s,c.a2t].filter(Boolean).join(', '))+'</td><td>'+esc((c.procs||[]).map(p=>p[0]+(p[1]?' ('+p[1]+')':'')).join(', '))+'</td><td>'+esc(c.sup)+'</td><td>'+esc(c.h?[c.h.site&&c.h.site.split(' ')[0],c.h.surgeon,c.h.airway,c.h.recPonv==='Yes'?'PONV':''].filter(Boolean).join(', '):'')+'</td><td>'+esc([c.notes,c.inc,c.incd].filter(Boolean).join('; '))+'</td></tr>').join('')+'</tbody></table>';
+    L.map((c,i)=>'<tr><td>'+(i+1)+'</td><td>'+uk(c.d)+'</td><td>'+esc(c.s&&c.e&&c.s!==c.e?c.s+'–'+c.e:c.s||'')+(indMin(c)!=null?'<br>induction '+indMin(c)+' min':'')+'</td><td>'+esc(c.age)+'</td><td>'+esc(c.sex)+'</td><td>'+esc(c.asa)+'</td><td>'+esc(c.pri)+'</td><td>'+esc(c.spec)+'</td><td>'+esc(c.op)+'</td><td>'+esc([c.a1,MT[maint(c)]].filter(Boolean).join(', '))+'</td><td>'+esc([c.a2,c.a2s,c.a2t].filter(Boolean).join(', '))+'</td><td>'+esc((c.procs||[]).map(p=>p[0]+(p[1]?' ('+p[1]+')':'')).join(', '))+'</td><td>'+esc(c.sup)+'</td><td>'+esc(c.h?[c.h.site&&c.h.site.split(' ')[0],c.h.surgeon,c.h.airway,c.h.recPonv==='Yes'?'PONV':''].filter(Boolean).join(', '):'')+'</td><td>'+esc([c.notes,c.inc,c.incd].filter(Boolean).join('; '))+'</td></tr>').join('')+'</tbody></table>';
   return h;
 }
 const REPORT_CSS='.rpt{font:12px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#111}.rpt h1{font-size:20px;margin:0 0 2px}.rpt .sub{margin:0 0 12px;color:#444}.rpt h2{font-size:14px;margin:18px 0 6px;border-bottom:1px solid #999;padding-bottom:2px}.rpt table{border-collapse:collapse;margin:0 0 10px}.rpt th,.rpt td{border:1px solid #bbb;padding:2px 5px;text-align:left;vertical-align:top}.rpt th{background:#eee}.rpt .cols{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start}.rpt .sum td:nth-child(n+2),.rpt .tot td{text-align:right;font-variant-numeric:tabular-nums}.rpt .cases{width:100%;font-size:10.5px}.rpt .dt td:nth-child(n+2){text-align:right;font-variant-numeric:tabular-nums}.rpt .dt{margin-top:3px}.rpt .tn{font-size:10.5px;color:#444;max-width:420px}.rpt .cases thead{display:table-header-group}.rpt tr,.rpt .sum,.rpt .tot{break-inside:avoid}.rpt .cases td:nth-child(2),.rpt .cases td:nth-child(3){white-space:nowrap}@page{size:A4 landscape;margin:10mm}';
