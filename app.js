@@ -140,6 +140,11 @@ function matchHospital(cases,recs){
   }
   return {pairs, newRecs, already};
 }
+/* cases pulled by an older app version keep hospital columns as unknown extras: move them into the hospital record */
+function liftHosp(c){ if(!c||!c.x) return c; const ks=Object.keys(c.x).filter(k=>/^hosp: /i.test(k)); if(!ks.length) return c;
+  const n=Object.assign({},c), x=Object.assign({},c.x), h=Object.assign({},c.h||{});
+  ks.forEach(k=>{const f=HOSP_FIELDS.find(f=>('hosp: '+f[1]).toLowerCase()===k.toLowerCase()); if(f&&x[k]&&!h[f[0]]) h[f[0]]=x[k]; delete x[k]});
+  if(Object.keys(h).length) n.h=h; if(Object.keys(x).length) n.x=x; else delete n.x; return n }
 function hospDetail(r){const h={}; HOSP_FIELDS.forEach(([k])=>{if(r[k]!=null&&r[k]!=='')h[k]=r[k]}); return h}
 function mergeHospital(c,r){
   const n=JSON.parse(JSON.stringify(c)); n.h=hospDetail(r);
@@ -670,6 +675,7 @@ function route(){
 function refresh(){ const v=location.hash.slice(1); if(v==='cases'){yearOptions();drawList()} else if(v==='summary') drawSummary(); else if(v!=='backup'&&!F.id){redraw.forEach(f=>f());drawOps()} }
 async function start(){
   try{ all=(await idb.get('cases'))||[]; dirty=(await idb.get('dirty'))||{}; meta=Object.assign(meta,(await idb.get('meta'))||{}); cfg=(await idb.get('cfg'))||null; stats=(await idb.get('stats'))||{mort:{}}; statsDirty=!!(await idb.get('statsDirty')); if(meta.v!==2&&meta.v!==3){meta.v=2;meta.sha='';meta.etag=''}
+    all=all.map(liftHosp); Object.keys(dirty).forEach(k=>{dirty[k]=liftHosp(dirty[k])});
     if(meta.v===2){ const me=hospMe(all.filter(c=>c.h).map(c=>c.h.cons).concat(all.filter(c=>c.h).map(c=>c.h.anaes))), now=Date.now(); let k=0;
       all=all.map(c=>{ if(!c.h) return c; const n=Object.assign({},c), s=c.h.tAn||c.h.tAnRoom, e=c.h.tRec||c.h.tEnd; if(s&&e){n.s=s;n.e=e} if(!n.sup&&n.notes==='Added from hospital theatre record') n.sup=supFromHosp(c.h.cons,c.h.anaes,me);
         if(n.s!==c.s||n.e!==c.e||n.sup!==c.sup){n.u=now;dirty[n.id]=n;k++;return n} return c });
