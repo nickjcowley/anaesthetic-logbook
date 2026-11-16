@@ -9,6 +9,8 @@ const mins=t=>t?(+t.slice(0,2))*60+(+t.slice(3,5)):null;
 const addMin=(t,m)=>{const x=((mins(t)+m)%1440+1440)%1440;return pad(Math.floor(x/60))+':'+pad(x%60)};
 const normOp=s=>String(s||'').toLowerCase().replace(/\s+/g,' ').trim();
 const uk=d=>d?d.slice(8,10)+'/'+d.slice(5,7)+'/'+d.slice(0,4):'';
+const caseMins=c=>{const a=mins(c.s),b=mins(c.e); if(a==null||b==null) return null; let d=b-a; if(d<0&&a>=17*60&&b<=10*60) d+=1440; return d>0&&d<=16*60?d:null};
+const exactTime=c=>!!(c.h&&(c.h.tAn||c.h.tAnRoom)&&(c.h.tRec||c.h.tEnd));
 const isGA=c=>/^GA/i.test(c.a1||'');
 const maint=c=>c.mt||(isGA(c)&&(c.procs||[]).some(p=>/^(tci|tiva)$/i.test(p[0]))?'TIVA':'');
 const MT={TIVA:'TIVA / TCI',Volatile:'Volatile'};
@@ -67,6 +69,7 @@ const HOSP_FIELDS=[['site','Site'],['theatre','Theatre'],['surgeon','Surgeon'],[
   ['cons','Consultant anaesthetist'],['anaes','Anaesthetist'],['airway','Airway'],['airwayDetail','Airway detail'],['lines','Invasive lines'],['agent','Maintenance (hospital)'],
   ['tAnRoom','Into anaesthetic room'],['tAn','Anaesthesia start'],['tTh','Into theatre'],['tKts','Knife to skin'],['tEnd','Surgery finished'],['tRec','Into recovery'],
   ['durAn','Anaesthetic minutes'],['durSurg','Surgery minutes'],['durTh','Minutes in theatre'],['recPain','Recovery: pain'],['recPonv','Recovery: PONV'],['recHypo','Recovery: temperature below 36'],['hage','Age (hospital)'],['hk','Hospital record key']];
+const HOSP_SHOW={durAn:'Anaesthesia start to into theatre (min)',durSurg:'Knife to skin to surgery finished (min)',durTh:'Into theatre to into recovery (min)'};
 const HCOL=k=>'Hosp: '+HOSP_FIELDS.find(f=>f[0]===k)[1];
 function hospAgent(mon){ const m=String(mon||'').toLowerCase(), a=(m.match(/(?:agent|n\/a)\s*([^|]*)/g)||[]).join(' ');
   if(/tiva|propofol|proprol|propfol|proprfol|teev|tci|remi/.test(a)&&!/sevo|desf|iso/.test(a)) return 'TIVA';
@@ -409,7 +412,7 @@ function loadForm(c){
   redraw.forEach(f=>f()); drawOps(); a2vis(); drawHospCard();
 }
 function drawHospCard(){ const h=F.h; $('hospCard').hidden=!h; if(!h) return;
-  $('hospBody').innerHTML=HOSP_FIELDS.filter(f=>f[0]!=='hk'&&h[f[0]]).map(f=>'<div class="kv"><span>'+esc(f[1])+'</span><b>'+esc(h[f[0]])+'</b></div>').join('') }
+  $('hospBody').innerHTML=HOSP_FIELDS.filter(f=>f[0]!=='hk'&&h[f[0]]).map(f=>'<div class="kv"><span>'+esc(HOSP_SHOW[f[0]]||f[1])+'</span><b>'+esc(h[f[0]])+'</b></div>').join('') }
 function a2vis(){ $('a2extra').hidden=!F.a2; $('mtBox').hidden=!isGA(F); if(!isGA(F)) F.mt='' }
 function drawGrp(){ const a=autoGroup({op:$('fOp').value,spec:F.spec}), v=F.grp||a; $('fGrp').innerHTML=(v?'':'<option value="">Set from the operation</option>')+GROUPS.map(x=>'<option'+(x===v?' selected':'')+'>'+esc(x)+'</option>').join('') }
 function drawOps(){
@@ -483,7 +486,7 @@ function drawList(){
   all.slice(0,shown).forEach(c=>{
     if(c.d!==day){day=c.d;h+='<div class="day">'+esc(niceDate(day))+'</div>'}
     const tech=[c.a1,MT[maint(c)],c.a2].concat((c.procs||[]).map(p=>p[0])).filter(Boolean).join(' · ');
-    const time=flagged(c)?'<span class="flag">'+(c.s||'no time')+' · no duration</span>':esc(c.s+'–'+c.e);
+    const cm=caseMins(c), time=flagged(c)||cm==null?'<span class="flag">'+esc(c.s||'no time')+' · no duration</span>':esc(c.s+'–'+c.e+' · '+cm+' min'+(exactTime(c)?'':' (logged)'));
     h+='<button type="button" class="case" data-id="'+esc(c.id)+'"><div class="op">'+esc(c.op||'(no operation)')+'</div><div class="m">'+
       esc([c.age!==''&&c.age!=null?c.age+(c.sex||''):c.sex,c.asa?'ASA '+c.asa:'',c.pri,c.spec,c.sup].filter(Boolean).join(' · '))+'</div><div class="m">'+esc(tech)+'</div><div class="m">'+time+
       (c.h?' · theatre record':'')+(c.notes?' · '+esc(c.notes):'')+(c.inc?' · <span class="flag">'+esc(c.inc)+'</span>':'')+'</div></button>';
@@ -520,7 +523,7 @@ function tally(list,get,order){
   let r=[...m]; if(order) r.sort((a,b)=>order.indexOf(a[0])-order.indexOf(b[0])); else r.sort((a,b)=>b[1]-a[1]); return r;
 }
 function summarise(){
-  const L=inRange(), n=L.length; let m=0; L.forEach(c=>{const a=mins(c.s),b=mins(c.e); if(a!=null&&b!=null&&b>a)m+=b-a});
+  const L=inRange(), n=L.length; let m=0; L.forEach(c=>{const d=caseMins(c); if(d)m+=d});
   const blocks=L.filter(c=>c.a2), gas=L.filter(isGA), HL=L.filter(c=>c.h), rec=k=>HL.filter(c=>c.h[k]==='Yes'||c.h[k]==='No');
   const S={n,hours:Math.round(m/60),solo:L.filter(c=>c.sup==='Consultant Solo').length,teach:L.filter(c=>/^Teaching/.test(c.sup||'')).length,
     from:$('rFrom').value,to:$('rTo').value,sections:[
@@ -553,6 +556,17 @@ function summaryTables(L,HL){
   if(gas.length){ const ys=[...new Set(gas.map(c=>c.d.slice(0,4)))].sort();
     T.push({title:'GA maintenance by year',cols:['Year','General anaesthetics','TIVA / TCI','Volatile','Not recorded','TIVA % of all GAs','TIVA % where recorded'],bar:true,note:'"Where recorded" is shown only for years where at least half of GAs have maintenance recorded. Before theatre records, only TCI use was logged, so earlier years understate volatile use.',
       rows:ys.map(y=>{const g=gas.filter(c=>c.d.startsWith(y)), t=g.filter(c=>maint(c)==='TIVA').length, v=g.filter(c=>maint(c)==='Volatile').length; return [y,g.length,t,v,g.length-t-v,Math.round(100*t/g.length)+'%',(t+v)*2>=g.length?Math.round(100*t/(t+v))+'%':'–']})}) }
+  const timed=L.filter(c=>caseMins(c)!=null);
+  if(timed.length){
+    const q=(a,p)=>{const s=a.slice().sort((x,y)=>x-y),i=(s.length-1)*p,lo=Math.floor(i),hi=Math.ceil(i);return s[lo]+(s[hi]-s[lo])*(i-lo)};
+    const row=(k,cs)=>{const m=cs.map(caseMins);return [k,cs.length,Math.round(q(m,.5)),Math.round(q(m,.25))+'–'+Math.round(q(m,.75)),(m.reduce((a,x)=>a+x,0)/60).toFixed(1)]};
+    const grp2=new Map(); timed.forEach(c=>{const k=grp(c)||'Not grouped'; if(!grp2.has(k))grp2.set(k,[]); grp2.get(k).push(c)});
+    const ex=timed.filter(exactTime).length, note='Anaesthetic time is anaesthesia start to into recovery from the theatre record for '+ex+' of '+timed.length+' timed cases; the rest use your logged start and end, which are often rounded. Middle half is the 25th to 75th centile.';
+    T.push({title:'Anaesthetic time by operation group',cols:['Operation group','Timed cases','Median minutes','Middle half (min)','Total hours'],note,rows:[...grp2].sort((a,b)=>b[1].length-a[1].length).map(([k,cs])=>row(k,cs))});
+    const op2=new Map(); timed.forEach(c=>{const k=(opts().opMap.get(normOp(c.op))||{label:c.op}).label; if(!op2.has(k))op2.set(k,[]); op2.get(k).push(c)});
+    const ops=[...op2].filter(x=>x[1].length>=5).sort((a,b)=>b[1].length-a[1].length).slice(0,20);
+    if(ops.length) T.push({title:'Anaesthetic time by operation (5 or more timed cases)',cols:['Operation','Timed cases','Median minutes','Middle half (min)','Total hours'],rows:ops.map(([k,cs])=>row(k,cs))});
+  }
   if(HL.length){
     const by=(f)=>{const m=new Map(); HL.forEach(c=>{const k=f(c)||'Not recorded'; if(!m.has(k))m.set(k,[]); m.get(k).push(c)}); return m};
     let surg=[...by(c=>c.h.surgeon)].sort((a,b)=>b[1].length-a[1].length); if(surg.length>15){const rest=surg.slice(14).reduce((a,x)=>a.concat(x[1]),[]); surg=surg.slice(0,14).concat([['Others ('+(surg.length-14)+' surgeons)',rest]])}
@@ -653,7 +667,7 @@ function reportBody(){
   if(S.tables.length) h+='<h2>Trends and theatre activity</h2><div class="cols">'+S.tables.map(t=>'<div><b>'+esc(t.title)+'</b>'+tableHtml(t,false)+(t.note?'<div class="tn">'+esc(t.note)+'</div>':'')+'</div>').join('')+'</div>';
   h+='<h2>Incidents</h2>'+(S.incidents.length?'<table class="cases"><tr><th>Date</th><th>Operation</th><th>Incident</th><th>Details</th></tr>'+S.incidents.map(c=>'<tr><td>'+uk(c.d)+'</td><td>'+esc(c.op)+'</td><td>'+esc(c.inc)+'</td><td>'+esc(c.incd)+'</td></tr>').join('')+'</table>':'<p>None recorded in this period.</p>');
   h+='<h2>All cases ('+L.length+')</h2><table class="cases"><thead><tr><th>#</th><th>Date</th><th>Time</th><th>Age</th><th>Sex</th><th>ASA</th><th>Priority</th><th>Speciality</th><th>Operation</th><th>Anaesthetic</th><th>Regional</th><th>Procedures</th><th>Supervision</th><th>Theatre record</th><th>Notes</th></tr></thead><tbody>'+
-    L.map((c,i)=>'<tr><td>'+(i+1)+'</td><td>'+uk(c.d)+'</td><td>'+esc(c.s&&c.e&&c.s!==c.e?c.s+'–'+c.e:c.s||'')+'</td><td>'+esc(c.age)+'</td><td>'+esc(c.sex)+'</td><td>'+esc(c.asa)+'</td><td>'+esc(c.pri)+'</td><td>'+esc(c.spec)+'</td><td>'+esc(c.op)+'</td><td>'+esc([c.a1,MT[maint(c)]].filter(Boolean).join(', '))+'</td><td>'+esc([c.a2,c.a2s,c.a2t].filter(Boolean).join(', '))+'</td><td>'+esc((c.procs||[]).map(p=>p[0]+(p[1]?' ('+p[1]+')':'')).join(', '))+'</td><td>'+esc(c.sup)+'</td><td>'+esc(c.h?[c.h.site&&c.h.site.split(' ')[0],c.h.surgeon,c.h.airway,c.h.recPonv==='Yes'?'PONV':''].filter(Boolean).join(', '):'')+'</td><td>'+esc([c.notes,c.inc,c.incd].filter(Boolean).join('; '))+'</td></tr>').join('')+'</tbody></table>';
+    L.map((c,i)=>'<tr><td>'+(i+1)+'</td><td>'+uk(c.d)+'</td><td>'+esc(c.s&&c.e&&c.s!==c.e?c.s+'–'+c.e:c.s||'')+(caseMins(c)!=null?'<br>'+caseMins(c)+' min':'')+'</td><td>'+esc(c.age)+'</td><td>'+esc(c.sex)+'</td><td>'+esc(c.asa)+'</td><td>'+esc(c.pri)+'</td><td>'+esc(c.spec)+'</td><td>'+esc(c.op)+'</td><td>'+esc([c.a1,MT[maint(c)]].filter(Boolean).join(', '))+'</td><td>'+esc([c.a2,c.a2s,c.a2t].filter(Boolean).join(', '))+'</td><td>'+esc((c.procs||[]).map(p=>p[0]+(p[1]?' ('+p[1]+')':'')).join(', '))+'</td><td>'+esc(c.sup)+'</td><td>'+esc(c.h?[c.h.site&&c.h.site.split(' ')[0],c.h.surgeon,c.h.airway,c.h.recPonv==='Yes'?'PONV':''].filter(Boolean).join(', '):'')+'</td><td>'+esc([c.notes,c.inc,c.incd].filter(Boolean).join('; '))+'</td></tr>').join('')+'</tbody></table>';
   return h;
 }
 const REPORT_CSS='.rpt{font:12px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#111}.rpt h1{font-size:20px;margin:0 0 2px}.rpt .sub{margin:0 0 12px;color:#444}.rpt h2{font-size:14px;margin:18px 0 6px;border-bottom:1px solid #999;padding-bottom:2px}.rpt table{border-collapse:collapse;margin:0 0 10px}.rpt th,.rpt td{border:1px solid #bbb;padding:2px 5px;text-align:left;vertical-align:top}.rpt th{background:#eee}.rpt .cols{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start}.rpt .sum td:nth-child(n+2),.rpt .tot td{text-align:right;font-variant-numeric:tabular-nums}.rpt .cases{width:100%;font-size:10.5px}.rpt .dt td:nth-child(n+2){text-align:right;font-variant-numeric:tabular-nums}.rpt .dt{margin-top:3px}.rpt .tn{font-size:10.5px;color:#444;max-width:420px}.rpt .cases thead{display:table-header-group}.rpt tr,.rpt .sum,.rpt .tot{break-inside:avoid}.rpt .cases td:nth-child(2),.rpt .cases td:nth-child(3){white-space:nowrap}@page{size:A4 landscape;margin:10mm}';
