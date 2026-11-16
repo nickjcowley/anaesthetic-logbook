@@ -72,6 +72,9 @@ function hospAgent(mon){ const m=String(mon||'').toLowerCase(), a=(m.match(/(?:a
   if(/tiva|propofol|proprol|propfol|proprfol|teev|tci|remi/.test(a)&&!/sevo|desf|iso/.test(a)) return 'TIVA';
   if(/sevo|desf|isoflu/.test(a)) return 'Volatile'; return '' }
 const tmin=t=>{const m=/^(\d{1,2}):(\d{2})/.exec(t||'');return m?(+m[1])*60+(+m[2]):null};
+const dmy=s=>{const m=/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s||'');return m?m[3]+'-'+pad(+m[2])+'-'+pad(+m[1]):''};
+function hospMe(names){const m={};names.forEach(n=>{if(n)m[n]=(m[n]||0)+1});return Object.keys(m).sort((a,b)=>m[b]-m[a])[0]||''}
+function supFromHosp(cons,anaes,me){ if(!me) return ''; if(cons===me&&(!anaes||anaes===me)) return 'Consultant Solo'; if(cons===me&&anaes&&anaes!==me) return 'Teaching: ST'; if(cons&&cons!==me&&anaes===me) return 'Consultant'; return '' }
 function readHospital(text){
   const rows=csvRows(text); if(rows.length<2) throw new Error('The file has no cases.');
   const H={}; rows[0].forEach((h,i)=>H[h.trim().toLowerCase()]=i);
@@ -90,6 +93,8 @@ function readHospital(text){
       durAn:g('dur_anaesthetic').replace(/\.0$/,''),durSurg:g('dur_surgery').replace(/\.0$/,''),durTh:g('dur_in_theatre').replace(/\.0$/,''),
       recPain:g('rec_pain')?(yes(g('rec_pain'))?'Yes':'No'):'',recPonv:g('rec_ponv')?(yes(g('rec_ponv'))?'Yes':'No'):'',recHypo:g('rec_hypothermia')?(yes(g('rec_hypothermia'))?'Yes':'No'):'',
       hage:age===''||isNaN(+age)?'':String(Math.round(+age)), sex:/^m/i.test(sex)?'M':/^f/i.test(sex)?'F':'', asa:/^[1-6]$/.test(asa)?asa:''};
+    {const dod=dmy(g('date_of_death')), known=dmy(g('dod_known_to')), op=Date.parse(d), dd=dod?(Date.parse(dod)-op)/864e5:null;
+      rec.mort=dod&&dd>=0&&dd<=30?true:(known&&(Date.parse(known)-op)/864e5>=30)||(dod&&dd>30)?false:null}
     rec.spec=g('specialty'); rec.hk=d+'|'+(rec.tAn||rec.tTh||rec.tAnRoom||rec.tKts)+'|'+normOp(rec.proc).slice(0,40);
     out.push(rec);
   }
@@ -140,15 +145,15 @@ function mergeHospital(c,r){
   const n=JSON.parse(JSON.stringify(c)); n.h=hospDetail(r);
   if(!n.asa&&r.asa) n.asa=r.asa; if(!n.sex&&r.sex) n.sex=r.sex; if((n.age===''||n.age==null)&&r.hage!=='') n.age=+r.hage;
   if(isGA(n)&&!maint(n)&&r.agent) n.mt=r.agent;
-  if((!n.s||!n.e||n.s===n.e)&&(r.tAn||r.tAnRoom)&&r.tRec){n.s=r.tAn||r.tAnRoom; n.e=r.tRec}
+  if((r.tAn||r.tAnRoom)&&(r.tRec||r.tEnd)){n.s=r.tAn||r.tAnRoom; n.e=r.tRec||r.tEnd}
   return n;
 }
 const PRI_FROM_CEPOD={Elective:'Routine',Urgent:'Urgent',Emergency:'Emergency',Expedited:'Urgent',Immediate:'Emergency'};
 function A1_FROM_HOSP(r){ const t=r.tech.toLowerCase(), air=r.airway.toLowerCase();
   if(/general|^ga/.test(t)) return /tracheal|tracheostomy/.test(air)?'GA ETT IPPV':/supraglottic/.test(air)?'GA LMA IPPV':/face mask/.test(air)?'GA Mask':'GA';
   if(/spinal/.test(t)) return 'Spinal'; if(/sedation/.test(t)) return 'Sedation'; if(/local/.test(t)) return 'LA'; if(/block|epidural/.test(t)) return 'Monitoring only'; return t?r.tech:'' }
-function caseFromHospital(r){
-  const c={id:newId(),d:r.d,s:r.tAn||r.tAnRoom||r.tTh||'',e:r.tRec||r.tEnd||'',sup:'',sex:r.sex,age:r.hage===''?'':+r.hage,asa:r.asa,
+function caseFromHospital(r,me){
+  const c={id:newId(),d:r.d,s:r.tAn||r.tAnRoom||r.tTh||'',e:r.tRec||r.tEnd||'',sup:supFromHosp(r.cons,r.anaes,me),sex:r.sex,age:r.hage===''?'':+r.hage,asa:r.asa,
     pri:r.ptype==='DayCase'&&(!r.cepod||r.cepod==='Elective')?'Day case':PRI_FROM_CEPOD[r.cepod]||'',spec:SPECMAP[r.spec]||r.spec||'',op:tidyName(r.proc),
     a1:A1_FROM_HOSP(r),mt:'',a2:/spinal/i.test(r.tech)&&/general/i.test(r.tech)?'Spinal':/nerve block|regional/i.test(r.tech)&&/general|spinal/i.test(r.tech)?'Nerve block':/epidural/i.test(r.tech)?'Epidural':'',
     a2s:'',a2t:'',procs:[],notes:'Added from hospital theatre record',inc:'',incd:'',h:hospDetail(r)};
@@ -156,12 +161,17 @@ function caseFromHospital(r){
 }
 
 /* ---------- storage on this device ---------- */
+let stats={mort:{}}, statsDirty=false;
+function addMortality(recs){ const m={}; recs.forEach(r=>{ if(r.mort==null) return; const k=r.d.slice(0,7); m[k]=m[k]||[0,0]; m[k][0]++; if(r.mort) m[k][1]++ });
+  Object.keys(m).forEach(k=>{ const o=stats.mort[k]; if(!o||m[k][0]>=o[0]) stats.mort[k]=m[k] }); statsDirty=true }
+function mergeStats(a,b){ const o={mort:Object.assign({},(b&&b.mort)||{})}; Object.keys((a&&a.mort)||{}).forEach(k=>{ if(!o.mort[k]||a.mort[k][0]>=o.mort[k][0]) o.mort[k]=a.mort[k] }); return o }
+function mortality(from,to){ const f=(from||'0000-00').slice(0,7), t=(to||'9999-99').slice(0,7); let n=0,d=0; const ks=Object.keys(stats.mort).filter(k=>k>=f&&k<=t).sort(); ks.forEach(k=>{n+=stats.mort[k][0];d+=stats.mort[k][1]}); return {n,d,from:ks[0],to:ks[ks.length-1]} }
 let all=[], dirty={}, meta={sha:'',etag:'',lastSync:0,lastBackup:0,changed:false,replace:false}, cfg=null, cache=null, syncErr='';
 const idb=(()=>{let p;const open=()=>p||(p=new Promise((res,rej)=>{const r=indexedDB.open('anaesthetic-logbook',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)}));
   return {get:k=>open().then(d=>new Promise((res,rej)=>{const q=d.transaction('kv').objectStore('kv').get(k);q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error)})),
     set:(k,v)=>open().then(d=>new Promise((res,rej)=>{const t=d.transaction('kv','readwrite');t.objectStore('kv').put(v,k);t.oncomplete=()=>res();t.onerror=()=>rej(t.error)}))}})();
 let saveChain=Promise.resolve();
-function persist(){ saveChain=saveChain.then(()=>Promise.all([idb.set('cases',all),idb.set('dirty',dirty),idb.set('meta',meta),idb.set('cfg',cfg)])).catch(()=>toast('Could not save to this phone. Free up space, then save a backup file.')); return saveChain }
+function persist(){ saveChain=saveChain.then(()=>Promise.all([idb.set('cases',all),idb.set('dirty',dirty),idb.set('meta',meta),idb.set('cfg',cfg),idb.set('stats',stats),idb.set('statsDirty',statsDirty)])).catch(()=>toast('Could not save to this phone. Free up space, then save a backup file.')); return saveChain }
 function cases(){
   if(cache) return cache;
   cache=all.filter(c=>c.d).sort((a,b)=>a.d<b.d?1:a.d>b.d?-1:(a.s<b.s?1:a.s>b.s?-1:0)); optCache=null; return cache;
@@ -245,7 +255,7 @@ async function ghGet(c,etag){
   return {sha:j.sha,text,etag:r.headers.get('ETag')||''};
 }
 async function ghPut(c,text,sha,n){
-  const body={message:'Logbook update: '+n+' cases',content:b64enc(text)}; if(sha) body.sha=sha;
+  const body={message:typeof n==='string'?n:'Logbook update: '+n+' cases',content:b64enc(text)}; if(sha) body.sha=sha;
   const r=await ghFetch(c,ghPath(c),{method:'PUT',body:JSON.stringify(body)});
   if(r.status===409||r.status===422) return {conflict:true}; if(!r.ok) throw ghError(r);
   return {sha:(await r.json()).content.sha};
@@ -270,6 +280,8 @@ async function sync(pull){
       all=applyDirty(list,dirty); meta.sha=sha; meta.etag=etag; meta.replace=false; meta.lastSync=Date.now(); syncErr=''; cache=null; break;
     }
   }catch(e){ failed=true; syncErr=e.http||!(e instanceof TypeError)?e.message:''; }
+  if(!failed&&(pull||statsDirty)){ try{ const c=Object.assign({},cfg,{path:cfg.path.replace(/\.csv$/i,'')+'-stats.json'}), got=await ghGet(c,''); let remote={mort:{}}; if(!got.missing){try{remote=JSON.parse(got.text)}catch(e){}}
+    const merged=mergeStats(stats,remote); stats=merged; if(statsDirty&&JSON.stringify(merged)!==JSON.stringify(remote)) await ghPut(c,JSON.stringify(merged),got.missing?'':got.sha,'Mortality totals update'); statsDirty=false }catch(e){} }
   syncing=false; persist(); syncLabel(); refresh();
   if(!failed&&(syncAgain||Object.keys(dirty).length)){syncAgain=false;syncSoon()} else syncAgain=false;
 }
@@ -521,9 +533,40 @@ function summarise(){
     ['Airway (theatre record)',tally(HL,c=>[c.h.airway||'Not recorded']),HL.length],
     ['Recovery (theatre record)',[['Pain needing attention',rec('recPain').filter(c=>c.h.recPain==='Yes').length,rec('recPain').length],['Nausea or vomiting',rec('recPonv').filter(c=>c.h.recPonv==='Yes').length,rec('recPonv').length],['Temperature below 36°C',rec('recHypo').filter(c=>c.h.recHypo==='Yes').length,rec('recHypo').length]]],
     ['Cases by year',tally(L,c=>[c.d.slice(0,4)]).sort((a,b)=>a[0]<b[0]?-1:1)]
-  ],incidents:L.filter(c=>c.inc||c.incd)};
+  ],incidents:L.filter(c=>c.inc||c.incd),tables:summaryTables(L,HL)};
   S.sections=S.sections.filter(s=>!(/theatre record/i.test(s[0])&&!L.some(c=>c.h))&&!(s[0]==='Recovery (theatre record)'&&!s[1].some(r=>r[2]))).map(s=>s[0]==='Recovery (theatre record)'?[s[0]+': % of cases where recorded',s[1].filter(r=>r[2])]:s).filter(s=>s[1].length&&!(s[0]==='Cases by year'&&s[1].length<2));
   return S;
+}
+
+const median=a=>{if(!a.length)return null;const s=a.slice().sort((x,y)=>x-y),m=s.length>>1;return s.length%2?s[m]:(s[m-1]+s[m])/2};
+const thMin=h=>{const v=parseFloat(h.durTh); if(!isNaN(v)) return v; const a=tmin(h.tTh||h.tAn), b=tmin(h.tRec||h.tEnd); return a!=null&&b!=null&&b>a?b-a:null};
+function summaryTables(L,HL){
+  const T=[], gas=L.filter(isGA);
+  if(gas.length){ const ys=[...new Set(gas.map(c=>c.d.slice(0,4)))].sort();
+    T.push({title:'GA maintenance by year',cols:['Year','General anaesthetics','TIVA / TCI','Volatile','Not recorded','TIVA % of all GAs','TIVA % where recorded'],bar:true,note:'"Where recorded" is shown only for years where at least half of GAs have maintenance recorded. Before theatre records, only TCI use was logged, so earlier years understate volatile use.',
+      rows:ys.map(y=>{const g=gas.filter(c=>c.d.startsWith(y)), t=g.filter(c=>maint(c)==='TIVA').length, v=g.filter(c=>maint(c)==='Volatile').length; return [y,g.length,t,v,g.length-t-v,Math.round(100*t/g.length)+'%',(t+v)*2>=g.length?Math.round(100*t/(t+v))+'%':'–']})}) }
+  if(HL.length){
+    const by=(f)=>{const m=new Map(); HL.forEach(c=>{const k=f(c)||'Not recorded'; if(!m.has(k))m.set(k,[]); m.get(k).push(c)}); return m};
+    let surg=[...by(c=>c.h.surgeon)].sort((a,b)=>b[1].length-a[1].length); if(surg.length>15){const rest=surg.slice(14).reduce((a,x)=>a.concat(x[1]),[]); surg=surg.slice(0,14).concat([['Others ('+(surg.length-14)+' surgeons)',rest]])}
+    const mins=cs=>cs.map(c=>thMin(c.h)).filter(x=>x!=null);
+    T.push({title:'Surgeons (theatre record)',cols:['Surgeon','Cases','Hours in theatre','Median minutes per case'],rows:surg.map(([k,cs])=>{const m=mins(cs);return [k,cs.length,(m.reduce((a,x)=>a+x,0)/60).toFixed(1),m.length?Math.round(median(m)):'']})});
+    const lists=new Map(); HL.forEach(c=>{const k=c.d+'|'+(c.h.site||'')+'|'+(c.h.theatre||''); if(!lists.has(k))lists.set(k,[]); lists.get(k).push(c)});
+    const site={}, wd={}, DAYS=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+    lists.forEach((cs,k)=>{ const s=cs[0].h.site||'Not recorded'; site[s]=site[s]||{lists:0,cases:0,ta:[]}; site[s].lists++; site[s].cases+=cs.length;
+      const o=cs.slice().sort((a,b)=>(tmin(a.h.tAnRoom||a.h.tAn||a.h.tTh)||0)-(tmin(b.h.tAnRoom||b.h.tAn||b.h.tTh)||0));
+      for(let i=1;i<o.length;i++){const out=tmin(o[i-1].h.tRec), inn=tmin(o[i].h.tTh); if(out!=null&&inn!=null){const g=inn-out; if(g>=-60&&g<=240) site[s].ta.push(Math.max(0,g))}}
+      const day=DAYS[(new Date(cs[0].d+'T12:00:00').getDay()+6)%7]; wd[day]=wd[day]||{lists:0,cases:0}; wd[day].lists++; wd[day].cases+=cs.length });
+    T.push({title:'Theatre lists by site (theatre record)',cols:['Site','Lists','Cases','Cases per list','Median turnaround (min)'],note:'Turnaround is from one patient into recovery to the next into theatre, on the same list.',
+      rows:Object.keys(site).sort((a,b)=>site[b].cases-site[a].cases).map(s=>[s,site[s].lists,site[s].cases,(site[s].cases/site[s].lists).toFixed(1),site[s].ta.length?Math.round(median(site[s].ta)):''])});
+    T.push({title:'List days (theatre record)',cols:['Day','Lists','Cases','Cases per list'],rows:DAYS.filter(d=>wd[d]).map(d=>[d,wd[d].lists,wd[d].cases,(wd[d].cases/wd[d].lists).toFixed(1)])});
+  }
+  return T;
+}
+function tableHtml(t,screen){
+  const sb=screen&&t.bar, bar=r=>{const tot=+r[1]; return '<td class="sb">'+(tot?['sbt','sbv','sbn'].map((k,i)=>'<span class="'+k+'" style="width:'+(100*r[2+i]/tot).toFixed(1)+'%"></span>').join(''):'')+'</td>'};
+  let h='<table class="dt"><thead><tr>'+t.cols.map((c,i)=>(sb&&i===1?'<th>Share</th>':'')+'<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>';
+  h+=t.rows.map(r=>'<tr>'+r.map((v,i)=>(sb&&i===1?bar(r):'')+'<td>'+esc(v)+'</td>').join('')+'</tr>').join('');
+  return h+'</tbody></table>';
 }
 function drawSummary(){
   const S=summarise(), pc=(x,d)=>{d=d||S.n;if(!d||!x)return '0%';const r=Math.round(100*x/d);return r<1?'<1%':r+'%'};
@@ -532,18 +575,23 @@ function drawSummary(){
   let h='';
   S.sections.forEach(([title,rows,den])=>{const max=Math.max.apply(null,rows.map(r=>r[1]));
     h+='<div class="card"><h2>'+esc(title)+'</h2><div class="bars">'+rows.map(r=>'<div class="n">'+esc(r[0])+'</div><div class="t" title="'+esc(r[0])+': '+r[1]+'"><i style="width:'+(100*r[1]/max).toFixed(1)+'%"></i></div><div class="v"><b>'+r[1]+'</b> '+pc(r[1],r[2]||den)+'</div>').join('')+'</div></div>'});
+  S.tables.forEach(t=>{h+='<div class="card"><h2>'+esc(t.title)+'</h2>'+(t.bar?'<div class="lg"><span class="sbt"></span>TIVA / TCI <span class="sbv"></span>Volatile <span class="sbn"></span>Not recorded</div>':'')+'<div class="tblwrap">'+tableHtml(t,true)+'</div>'+(t.note?'<div class="note">'+esc(t.note)+'</div>':'')+'</div>'});
   if(S.incidents.length) h+='<div class="card"><h2>Incidents and notes of concern</h2>'+S.incidents.map(c=>'<div class="m"><b>'+esc(niceDate(c.d))+'</b> '+esc(c.op)+': '+esc([c.inc,c.incd].filter(Boolean).join(', '))+'</div>').join('')+'</div>';
   $('sections').innerHTML=h||'<div class="note">No cases in this period.</div>';
 }
 function summaryText(){
   const S=summarise(); let t='Anaesthetic logbook summary\n'+niceDate(S.from)+' to '+niceDate(S.to)+'\n\nCases: '+S.n+'\nHours (cases with times): '+S.hours+'\nConsultant solo: '+S.solo+'\nTeaching: '+S.teach+'\n';
   S.sections.forEach(([title,rows,den])=>{t+='\n'+title+'\n'+rows.map(r=>{const d=r[2]||den||S.n;return '  '+r[0]+': '+r[1]+(d?' ('+Math.round(100*r[1]/d)+'%)':'')}).join('\n')+'\n'});
+  S.tables.forEach(tb=>{t+='\n'+tb.title+'\n  '+tb.cols.join(' | ')+'\n'+tb.rows.map(r=>'  '+r.join(' | ')).join('\n')+'\n'});
+  {const M=mortality(S.from,S.to); if(M.n) t+='\n30-day mortality (hospital theatre records)\n  '+M.d+(M.d===1?' death':' deaths')+' within 30 days of '+M.n+' operations ('+(100*M.d/M.n).toFixed(1)+'%)\n'}
   if(S.incidents.length) t+='\nIncidents\n'+S.incidents.map(c=>'  '+uk(c.d)+' '+c.op+': '+[c.inc,c.incd].filter(Boolean).join(', ')).join('\n')+'\n';
   return t;
 }
 function summaryCsv(){
   const S=summarise(); const rows=[['Section','Item','Cases','Percent of cases'],['Period','From '+uk(S.from)+' to '+uk(S.to),S.n,''],['Totals','Hours (cases with times)',S.hours,''],['Totals','Consultant solo',S.solo,''],['Totals','Teaching',S.teach,'']];
   S.sections.forEach(([title,r,den])=>r.forEach(x=>{const d=x[2]||den||S.n;rows.push([title,x[0],x[1],d?Math.round(100*x[1]/d):''])}));
+  S.tables.forEach(tb=>{rows.push([tb.title].concat(tb.cols)); tb.rows.forEach(r=>rows.push([tb.title].concat(r)))});
+  {const M=mortality(S.from,S.to); if(M.n) rows.push(['30-day mortality (hospital theatre records)','Deaths within 30 days of '+M.n+' operations',M.d,(100*M.d/M.n).toFixed(1)])}
   return rows.map(r=>r.map(q).join(',')).join('\r\n')+'\r\n';
 }
 function casesCsv(){return toCsv(inRange(),false)}
@@ -569,7 +617,7 @@ function setupHospImport(){
   $('hpFile').onchange=async()=>{ const f=$('hpFile').files[0]; if(!f) return; $('hpFile').value='';
     try{ const recs=readHospital(await f.text()); if(!recs.length) throw new Error('No cases found in that file.');
       const res=matchHospital(cases(),recs); const sure=res.pairs.filter(p=>p.sure), check=res.pairs.filter(p=>!p.sure);
-      hpPlan={sure,check,add:res.newRecs,already:res.already};
+      hpPlan={sure,check,add:res.newRecs,already:res.already,me:hospMe(recs.map(r=>r.cons).concat(recs.map(r=>r.anaes)))};
       const ds=recs.map(r=>r.d).sort();
       let h='<div>'+recs.length+' theatre records from '+uk(ds[0])+' to '+uk(ds[ds.length-1])+'.</div><ul class="hpsum"><li><b>'+sure.length+'</b> match a case in your logbook.</li>'+
         (check.length?'<li><b>'+check.length+'</b> possible matches to check below.</li>':'')+(res.newRecs.length?'<li><b>'+res.newRecs.length+'</b> are not in your logbook.</li>':'')+(res.already.length?'<li><b>'+res.already.length+'</b> were imported before and are skipped.</li>':'')+'</ul>';
@@ -581,7 +629,8 @@ function setupHospImport(){
   $('hpGo').onclick=()=>{ if(!hpPlan) return; const ticked=k=>{const b=document.querySelector('#hpList input[data-k="'+k+'"]');return !!(b&&b.checked)};
     const pairs=hpPlan.sure.concat(hpPlan.check.filter((p,i)=>ticked('c'+i))), adds=hpPlan.add.filter((r,i)=>ticked('n'+i)), now=Date.now();
     pairs.forEach(p=>{const i=all.findIndex(x=>x.id===p.c.id); if(i<0) return; const n=mergeHospital(all[i],p.r); n.u=now; all[i]=n; dirty[n.id]=n});
-    adds.forEach(r=>{const n=caseFromHospital(r); n.u=now; all.push(n); dirty[n.id]=n});
+    addMortality(pairs.map(p=>p.r).concat(adds,hpPlan.already));
+    adds.forEach(r=>{const n=caseFromHospital(r,hpPlan.me); n.u=now; all.push(n); dirty[n.id]=n});
     meta.changed=true; cache=null; hpPlan=null; $('hpConfirm').hidden=true; $('hpList').innerHTML=''; persist(); syncLabel(); refresh(); syncSoon();
     toast(pairs.length+' cases updated'+(adds.length?', '+adds.length+' added':'')) };
 }
@@ -592,12 +641,14 @@ function reportBody(){
   let h='<h1>Anaesthetic logbook: appraisal report</h1><p class="sub">'+esc(niceDate(S.from))+' to '+esc(niceDate(S.to))+' · generated '+esc(niceDate(today()))+'</p>';
   h+='<table class="tot"><tr><th>Cases</th><th>Hours (cases with times)</th><th>Consultant solo</th><th>Teaching</th></tr><tr><td>'+S.n+'</td><td>'+S.hours+'</td><td>'+S.solo+' ('+pc(S.solo)+')</td><td>'+S.teach+' ('+pc(S.teach)+')</td></tr></table>';
   h+='<h2>Summary</h2><div class="cols">'+S.sections.map(([t,rows,den])=>'<table class="sum"><tr><th>'+esc(t)+'</th><th>Cases</th><th>%</th></tr>'+rows.map(r=>'<tr><td>'+esc(r[0])+'</td><td>'+r[1]+'</td><td>'+pc(r[1],r[2]||den)+'</td></tr>').join('')+'</table>').join('')+'</div>';
+  {const M=mortality(S.from,S.to); if(M.n) h+='<h2>30-day mortality (hospital theatre records)</h2><p>'+M.d+' death'+(M.d===1?'':'s')+' within 30 days of '+M.n+' operations with at least 30 days of follow-up ('+(100*M.d/M.n).toFixed(1)+'%), from records covering '+esc(M.from.slice(5)+'/'+M.from.slice(0,4))+' to '+esc(M.to.slice(5)+'/'+M.to.slice(0,4))+'. Crude rate, not adjusted for case mix.</p>'}
+  if(S.tables.length) h+='<h2>Trends and theatre activity</h2><div class="cols">'+S.tables.map(t=>'<div><b>'+esc(t.title)+'</b>'+tableHtml(t,false)+(t.note?'<div class="tn">'+esc(t.note)+'</div>':'')+'</div>').join('')+'</div>';
   h+='<h2>Incidents</h2>'+(S.incidents.length?'<table class="cases"><tr><th>Date</th><th>Operation</th><th>Incident</th><th>Details</th></tr>'+S.incidents.map(c=>'<tr><td>'+uk(c.d)+'</td><td>'+esc(c.op)+'</td><td>'+esc(c.inc)+'</td><td>'+esc(c.incd)+'</td></tr>').join('')+'</table>':'<p>None recorded in this period.</p>');
   h+='<h2>All cases ('+L.length+')</h2><table class="cases"><thead><tr><th>#</th><th>Date</th><th>Time</th><th>Age</th><th>Sex</th><th>ASA</th><th>Priority</th><th>Speciality</th><th>Operation</th><th>Anaesthetic</th><th>Regional</th><th>Procedures</th><th>Supervision</th><th>Theatre record</th><th>Notes</th></tr></thead><tbody>'+
     L.map((c,i)=>'<tr><td>'+(i+1)+'</td><td>'+uk(c.d)+'</td><td>'+esc(c.s&&c.e&&c.s!==c.e?c.s+'–'+c.e:c.s||'')+'</td><td>'+esc(c.age)+'</td><td>'+esc(c.sex)+'</td><td>'+esc(c.asa)+'</td><td>'+esc(c.pri)+'</td><td>'+esc(c.spec)+'</td><td>'+esc(c.op)+'</td><td>'+esc([c.a1,MT[maint(c)]].filter(Boolean).join(', '))+'</td><td>'+esc([c.a2,c.a2s,c.a2t].filter(Boolean).join(', '))+'</td><td>'+esc((c.procs||[]).map(p=>p[0]+(p[1]?' ('+p[1]+')':'')).join(', '))+'</td><td>'+esc(c.sup)+'</td><td>'+esc(c.h?[c.h.site&&c.h.site.split(' ')[0],c.h.surgeon,c.h.airway,c.h.recPonv==='Yes'?'PONV':''].filter(Boolean).join(', '):'')+'</td><td>'+esc([c.notes,c.inc,c.incd].filter(Boolean).join('; '))+'</td></tr>').join('')+'</tbody></table>';
   return h;
 }
-const REPORT_CSS='.rpt{font:12px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#111}.rpt h1{font-size:20px;margin:0 0 2px}.rpt .sub{margin:0 0 12px;color:#444}.rpt h2{font-size:14px;margin:18px 0 6px;border-bottom:1px solid #999;padding-bottom:2px}.rpt table{border-collapse:collapse;margin:0 0 10px}.rpt th,.rpt td{border:1px solid #bbb;padding:2px 5px;text-align:left;vertical-align:top}.rpt th{background:#eee}.rpt .cols{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start}.rpt .sum td:nth-child(n+2),.rpt .tot td{text-align:right;font-variant-numeric:tabular-nums}.rpt .cases{width:100%;font-size:10.5px}.rpt .cases thead{display:table-header-group}.rpt tr,.rpt .sum,.rpt .tot{break-inside:avoid}.rpt .cases td:nth-child(2),.rpt .cases td:nth-child(3){white-space:nowrap}@page{size:A4 landscape;margin:10mm}';
+const REPORT_CSS='.rpt{font:12px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#111}.rpt h1{font-size:20px;margin:0 0 2px}.rpt .sub{margin:0 0 12px;color:#444}.rpt h2{font-size:14px;margin:18px 0 6px;border-bottom:1px solid #999;padding-bottom:2px}.rpt table{border-collapse:collapse;margin:0 0 10px}.rpt th,.rpt td{border:1px solid #bbb;padding:2px 5px;text-align:left;vertical-align:top}.rpt th{background:#eee}.rpt .cols{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start}.rpt .sum td:nth-child(n+2),.rpt .tot td{text-align:right;font-variant-numeric:tabular-nums}.rpt .cases{width:100%;font-size:10.5px}.rpt .dt td:nth-child(n+2){text-align:right;font-variant-numeric:tabular-nums}.rpt .dt{margin-top:3px}.rpt .tn{font-size:10.5px;color:#444;max-width:420px}.rpt .cases thead{display:table-header-group}.rpt tr,.rpt .sum,.rpt .tot{break-inside:avoid}.rpt .cases td:nth-child(2),.rpt .cases td:nth-child(3){white-space:nowrap}@page{size:A4 landscape;margin:10mm}';
 function reportDoc(){return '<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Anaesthetic logbook appraisal report '+uk($('rFrom').value)+' to '+uk($('rTo').value)+'</title><style>body{margin:12px;background:#fff}'+REPORT_CSS+'</style></head><body><div class="rpt">'+reportBody()+'</div></body></html>'}
 function openReport(){ $('rpBody').innerHTML='<style>'+REPORT_CSS+'</style><div class="rpt">'+reportBody()+'</div>'; $('report').hidden=false; document.body.classList.add('rp'); $('report').scrollTop=0 }
 async function giveFile(name,text,type){
@@ -618,7 +669,11 @@ function route(){
 }
 function refresh(){ const v=location.hash.slice(1); if(v==='cases'){yearOptions();drawList()} else if(v==='summary') drawSummary(); else if(v!=='backup'&&!F.id){redraw.forEach(f=>f());drawOps()} }
 async function start(){
-  try{ all=(await idb.get('cases'))||[]; dirty=(await idb.get('dirty'))||{}; meta=Object.assign(meta,(await idb.get('meta'))||{}); cfg=(await idb.get('cfg'))||null; if(meta.v!==2){meta.v=2;meta.sha='';meta.etag=''} }catch(e){ toast('This browser is blocking storage, so cases cannot be kept. Leave private browsing.') }
+  try{ all=(await idb.get('cases'))||[]; dirty=(await idb.get('dirty'))||{}; meta=Object.assign(meta,(await idb.get('meta'))||{}); cfg=(await idb.get('cfg'))||null; stats=(await idb.get('stats'))||{mort:{}}; statsDirty=!!(await idb.get('statsDirty')); if(meta.v!==2&&meta.v!==3){meta.v=2;meta.sha='';meta.etag=''}
+    if(meta.v===2){ const me=hospMe(all.filter(c=>c.h).map(c=>c.h.cons).concat(all.filter(c=>c.h).map(c=>c.h.anaes))), now=Date.now(); let k=0;
+      all=all.map(c=>{ if(!c.h) return c; const n=Object.assign({},c), s=c.h.tAn||c.h.tAnRoom, e=c.h.tRec||c.h.tEnd; if(s&&e){n.s=s;n.e=e} if(!n.sup&&n.notes==='Added from hospital theatre record') n.sup=supFromHosp(c.h.cons,c.h.anaes,me);
+        if(n.s!==c.s||n.e!==c.e||n.sup!==c.sup){n.u=now;dirty[n.id]=n;k++;return n} return c });
+      meta.v=3; if(k) meta.changed=true; await persist() } }catch(e){ toast('This browser is blocking storage, so cases cannot be kept. Leave private browsing.') }
   F=blank(); setupForm(); setupList(); setupSummary(); setupBackup(); setupHospImport(); setupDates(); loadForm(blank()); setRange('12 months'); route(); syncLabel();
   window.addEventListener('hashchange',route);
   window.addEventListener('online',()=>sync(true));
