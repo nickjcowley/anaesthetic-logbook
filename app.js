@@ -62,6 +62,99 @@ function autoGroup(c){
 }
 const grp=c=>c.grp||autoGroup(c);
 
+/* ---------- hospital theatre records: read, match, merge ---------- */
+const HOSP_FIELDS=[['site','Site'],['theatre','Theatre'],['surgeon','Surgeon'],['proc','Procedure (hospital)'],['tech','Anaesthetic (hospital)'],['cepod','CEPOD'],['ptype','Patient type'],
+  ['cons','Consultant anaesthetist'],['anaes','Anaesthetist'],['airway','Airway'],['airwayDetail','Airway detail'],['lines','Invasive lines'],['agent','Maintenance (hospital)'],
+  ['tAnRoom','Into anaesthetic room'],['tAn','Anaesthesia start'],['tTh','Into theatre'],['tKts','Knife to skin'],['tEnd','Surgery finished'],['tRec','Into recovery'],
+  ['durAn','Anaesthetic minutes'],['durSurg','Surgery minutes'],['durTh','Minutes in theatre'],['recPain','Recovery: pain'],['recPonv','Recovery: PONV'],['recHypo','Recovery: temperature below 36'],['hage','Age (hospital)'],['hk','Hospital record key']];
+const HCOL=k=>'Hosp: '+HOSP_FIELDS.find(f=>f[0]===k)[1];
+function hospAgent(mon){ const m=String(mon||'').toLowerCase(), a=(m.match(/(?:agent|n\/a)\s*([^|]*)/g)||[]).join(' ');
+  if(/tiva|propofol|proprol|propfol|proprfol|teev|tci|remi/.test(a)&&!/sevo|desf|iso/.test(a)) return 'TIVA';
+  if(/sevo|desf|isoflu/.test(a)) return 'Volatile'; return '' }
+const tmin=t=>{const m=/^(\d{1,2}):(\d{2})/.exec(t||'');return m?(+m[1])*60+(+m[2]):null};
+function readHospital(text){
+  const rows=csvRows(text); if(rows.length<2) throw new Error('The file has no cases.');
+  const H={}; rows[0].forEach((h,i)=>H[h.trim().toLowerCase()]=i);
+  for(const need of ['date','procedure']) if(H[need]==null) throw new Error('This does not look like a theatre export: it has no "'+need+'" column.');
+  const sp=s=>String(s||'').replace(/\s+/g,' ').trim(), yes=v=>/^(true|yes)/i.test(sp(v));
+  const out=[];
+  for(const r of rows.slice(1)){
+    const g=n=>{const i=H[n];return i==null?'':sp(r[i])};
+    let d=g('date'),m; if((m=d.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/))) d=m[3]+'-'+pad(+m[2])+'-'+pad(+m[1]); else if(!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+    const hm=t=>{const x=/^(\d{1,2}):(\d{2})/.exec(t);return x?pad(+x[1])+':'+x[2]:''};
+    const lines=[yes(g('inv_arterial'))&&'Arterial line',yes(g('inv_cvc'))&&'Central line',yes(g('inv_swan'))&&'PA catheter',yes(g('inv_cardiac_output'))&&'Cardiac output monitoring'].filter(Boolean).join(', ');
+    const age=g('age'), sex=g('gender'), asa=g('asa');
+    const rec={d,proc:g('procedure'),site:g('hospital'),theatre:g('theatre'),surgeon:g('surgeon'),tech:g('anaesthetic'),cepod:g('cepod'),ptype:g('patient_type'),
+      cons:g('cons_anaes'),anaes:g('anaes'),airway:g('airway'),airwayDetail:g('airway_raw').replace(/\|/g,', '),lines,agent:hospAgent(g('monitoring_raw')),
+      tAnRoom:hm(g('t_enter_anaes_room')),tAn:hm(g('t_anaes_start')),tTh:hm(g('t_enter_theatre')),tKts:hm(g('t_kts')),tEnd:hm(g('t_procedure_finished')),tRec:hm(g('t_enter_recovery')),
+      durAn:g('dur_anaesthetic').replace(/\.0$/,''),durSurg:g('dur_surgery').replace(/\.0$/,''),durTh:g('dur_in_theatre').replace(/\.0$/,''),
+      recPain:g('rec_pain')?(yes(g('rec_pain'))?'Yes':'No'):'',recPonv:g('rec_ponv')?(yes(g('rec_ponv'))?'Yes':'No'):'',recHypo:g('rec_hypothermia')?(yes(g('rec_hypothermia'))?'Yes':'No'):'',
+      hage:age===''||isNaN(+age)?'':String(Math.round(+age)), sex:/^m/i.test(sex)?'M':/^f/i.test(sex)?'F':'', asa:/^[1-6]$/.test(asa)?asa:''};
+    rec.spec=g('specialty'); rec.hk=d+'|'+(rec.tAn||rec.tTh||rec.tAnRoom||rec.tKts)+'|'+normOp(rec.proc).slice(0,40);
+    out.push(rec);
+  }
+  return out;
+}
+/* operation similarity: expand abbreviations, stem, compare word sets */
+const OPWORDS={lap:'laparoscopic',chole:'cholecystectomy',eua:'examination anaesthesia',thr:'total hip replacement',trh:'total hip replacement',tkr:'total knee replacement',
+  dhs:'dynamic hip screw',wle:'wide local excision breast',wles:'wide local excision breast',turbt:'transurethral resection bladder tumour',turp:'transurethral resection prostate',
+  thd:'transanal haemorrhoidal dearterialisation',erpc:'surgical management miscarriage',smm:'surgical management miscarriage',tah:'total abdominal hysterectomy',bso:'salpingoophorectomy bilateral',
+  orif:'orif fixation',mua:'manipulation mua',kwire:'kwire wire',ogd:'oesophagogastroduodenoscopy ogd',peg:'peg gastrostomy',lscs:'caesarean',acj:'acromioclavicular',
+  hemi:'hemiarthroplasty',ln:'lymph node',bx:'biopsy',fb:'foreign body',im:'intramedullary nail',nail:'intramedullary nail fixation',reversal:'closure reversal',
+  fundoplication:'fundoplication antireflux hiatus',appendix:'appendicectomy',extractions:'extraction tooth',teeth:'tooth',haemorrhoids:'haemorrhoidectomy haemorrhoid',
+  i:'',and:'',d:'',of:'',the:'',with:'',to:'',from:'',for:'',procedure:'',primary:'',repair:'repair',xfix:'external fixator',exfix:'external fixator'};
+function opWords(s){
+  let t=' '+String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ')+' ';
+  t=t.replace(/ i and d /g,' incision drainage ').replace(/ k wire /g,' kwire ').replace(/ x fix /g,' xfix ').replace(/ ex fix /g,' xfix ').replace(/ roux en y /g,' roux gastric bypass ');
+  const w=new Set(); t.trim().split(' ').forEach(x=>{const e=OPWORDS[x]; (e==null?x:e).split(' ').forEach(y=>{if(y&&y.length>1)w.add(y.length>=5?y.slice(0,5):y)})}); return w;
+}
+function opSim(a,b){const A=opWords(a),B=opWords(b); if(!A.size||!B.size) return 0; let n=0; A.forEach(x=>{if(B.has(x))n++}); return n/Math.min(A.size,B.size)}
+const SPECMAP={'General Surgery':'General','Trauma & Orthopaedics':'Trauma','Obstetrics and Gynaecology':'Gynae','Maxillofacial and Oral Surgery':'Maxillo-facial','Vascular Surgery':'Vascular','Urology':'Urology','ENT':'ENT','Breast Surgery':'General'};
+function matchScore(c,r){
+  const os=opSim(c.op,r.proc), g1=autoGroup(c), g2=autoGroup({op:r.proc,spec:SPECMAP[r.spec]||c.spec}), sameGroup=g1&&g1===g2;
+  const ts=[r.tAnRoom,r.tAn,r.tTh,r.tKts].map(tmin).filter(x=>x!=null), cs=tmin(c.s);
+  const dt=cs==null||!ts.length?120:Math.min.apply(null,ts.map(x=>Math.abs(x-cs)));
+  let s=45*os+(sameGroup?20:0)+Math.max(0,30-dt/4);
+  const sexOK=!(c.sex&&r.sex)||c.sex===r.sex, hasAge=c.age!==''&&c.age!=null&&r.hage!=='', da=hasAge?Math.abs(+c.age-(+r.hage)):null;
+  if(c.sex&&r.sex) s+=sexOK?8:-30;
+  if(hasAge) s+=da<=5?8:da<=12?2:da<=25?-8:-25;
+  const sure=sexOK&&(s>=60||(hasAge&&da<=5&&dt<=30)||((!hasAge||da<=12)&&(os>=0.5||sameGroup)&&dt<=120));
+  return {s,os,dt,sameGroup,sure};
+}
+function matchHospital(cases,recs){
+  const byDay={}; cases.forEach(c=>{(byDay[c.d]=byDay[c.d]||[]).push(c)});
+  const done=new Set(cases.map(c=>c.h&&c.h.hk).filter(Boolean));
+  const pairs=[], newRecs=[], already=[];
+  const recDays={}; recs.forEach(r=>{ if(done.has(r.hk)) already.push(r); else (recDays[r.d]=recDays[r.d]||[]).push(r) });
+  for(const d in recDays){
+    const R=recDays[d], C=(byDay[d]||[]).filter(c=>!(c.h&&c.h.hk)), cand=[];
+    R.forEach(r=>C.forEach(c=>{const m=matchScore(c,r); if(m.s>=10) cand.push(Object.assign({c,r},m))}));
+    cand.sort((a,b)=>b.s-a.s); const uc=new Set(), ur=new Set();
+    cand.forEach(p=>{ if(uc.has(p.c)||ur.has(p.r)) return; uc.add(p.c); ur.add(p.r); pairs.push(p) });
+    R.forEach(r=>{if(!ur.has(r)) newRecs.push(r)});
+  }
+  return {pairs, newRecs, already};
+}
+function hospDetail(r){const h={}; HOSP_FIELDS.forEach(([k])=>{if(r[k]!=null&&r[k]!=='')h[k]=r[k]}); return h}
+function mergeHospital(c,r){
+  const n=JSON.parse(JSON.stringify(c)); n.h=hospDetail(r);
+  if(!n.asa&&r.asa) n.asa=r.asa; if(!n.sex&&r.sex) n.sex=r.sex; if((n.age===''||n.age==null)&&r.hage!=='') n.age=+r.hage;
+  if(isGA(n)&&!maint(n)&&r.agent) n.mt=r.agent;
+  if((!n.s||!n.e||n.s===n.e)&&(r.tAn||r.tAnRoom)&&r.tRec){n.s=r.tAn||r.tAnRoom; n.e=r.tRec}
+  return n;
+}
+const PRI_FROM_CEPOD={Elective:'Routine',Urgent:'Urgent',Emergency:'Emergency',Expedited:'Urgent',Immediate:'Emergency'};
+function A1_FROM_HOSP(r){ const t=r.tech.toLowerCase(), air=r.airway.toLowerCase();
+  if(/general|^ga/.test(t)) return /tracheal|tracheostomy/.test(air)?'GA ETT IPPV':/supraglottic/.test(air)?'GA LMA IPPV':/face mask/.test(air)?'GA Mask':'GA';
+  if(/spinal/.test(t)) return 'Spinal'; if(/sedation/.test(t)) return 'Sedation'; if(/local/.test(t)) return 'LA'; if(/block|epidural/.test(t)) return 'Monitoring only'; return t?r.tech:'' }
+function caseFromHospital(r){
+  const c={id:newId(),d:r.d,s:r.tAn||r.tAnRoom||r.tTh||'',e:r.tRec||r.tEnd||'',sup:'',sex:r.sex,age:r.hage===''?'':+r.hage,asa:r.asa,
+    pri:r.ptype==='DayCase'&&(!r.cepod||r.cepod==='Elective')?'Day case':PRI_FROM_CEPOD[r.cepod]||'',spec:SPECMAP[r.spec]||r.spec||'',op:tidyName(r.proc),
+    a1:A1_FROM_HOSP(r),mt:'',a2:/spinal/i.test(r.tech)&&/general/i.test(r.tech)?'Spinal':/nerve block|regional/i.test(r.tech)&&/general|spinal/i.test(r.tech)?'Nerve block':/epidural/i.test(r.tech)?'Epidural':'',
+    a2s:'',a2t:'',procs:[],notes:'Added from hospital theatre record',inc:'',incd:'',h:hospDetail(r)};
+  if(isGA(c)) c.mt=r.agent; return c;
+}
+
 /* ---------- storage on this device ---------- */
 let all=[], dirty={}, meta={sha:'',etag:'',lastSync:0,lastBackup:0,changed:false,replace:false}, cfg=null, cache=null, syncErr='';
 const idb=(()=>{let p;const open=()=>p||(p=new Promise((res,rej)=>{const r=indexedDB.open('anaesthetic-logbook',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)}));
@@ -93,12 +186,12 @@ const q=v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"';
 function toCsv(L,withIds){
   const extra=Math.max(0,Math.max.apply(null,[3].concat(L.map(c=>(c.procs||[]).length)))-3);
   const head=HEAD.slice(); for(let i=0;i<extra;i++){const n=i+4;head.push('Procedure '+n,'Procedure '+n+': Operator Status','Procedure '+n+': Technique')}
-  head.push('Maintenance','Operation Group'); const xs=[]; if(withIds){L.forEach(c=>{if(c.x)Object.keys(c.x).forEach(k=>{if(!xs.includes(k)&&!KNOWN.test(k))xs.push(k)})}); xs.forEach(k=>head.push(k)); head.push('ID','Updated')}
+  head.push('Maintenance','Operation Group'); const hasH=L.some(c=>c.h); if(hasH) HOSP_FIELDS.forEach(f=>head.push('Hosp: '+f[1])); const xs=[]; if(withIds){L.forEach(c=>{if(c.x)Object.keys(c.x).forEach(k=>{if(!xs.includes(k)&&!KNOWN.test(k))xs.push(k)})}); xs.forEach(k=>head.push(k)); head.push('ID','Updated')}
   const tm=t=>t?t+':00':'';
   const rows=L.map(c=>{const p=c.procs||[], cell=i=>p[i]?[p[i][0],p[i][1]||'',p[i][2]||'']:['','',''];
     let r=[withIds?c.d:uk(c.d),tm(c.s),tm(c.e||c.s),c.sup,c.sex,c.age===''||c.age==null?'':(+c.age).toFixed(1),c.asa,c.pri,c.spec,c.op,c.a1,c.a2,c.a2s,c.a2t]
       .concat(cell(0),cell(1),cell(2),[c.notes,c.inc,c.incd]); for(let i=0;i<extra;i++) r=r.concat(cell(3+i));
-    r.push(maint(c),grp(c)); if(withIds){xs.forEach(k=>r.push(c.x&&c.x[k]||'')); r.push(c.id,c.u?new Date(c.u).toISOString():'')} return r.map(q).join(',')});
+    r.push(maint(c),grp(c)); if(hasH) HOSP_FIELDS.forEach(f=>r.push(c.h&&c.h[f[0]]||'')); if(withIds){xs.forEach(k=>r.push(c.x&&c.x[k]||'')); r.push(c.id,c.u?new Date(c.u).toISOString():'')} return r.map(q).join(',')});
   return [head.map(q).join(',')].concat(rows).join('\r\n')+'\r\n';
 }
 function csvRows(text){
@@ -110,7 +203,7 @@ function csvRows(text){
     else cell+=ch }
   row.push(cell); if(row.length>1||row[0]!=='')rows.push(row); return rows;
 }
-const KNOWN=/^(date|start|end|supervision|sex|age|asa|priority|speciality|operation|anaesthetic [12]|anesthetic 2: (operator status|technique)|procedure \d+(: (operator status|technique))?|notes|incidents|incident details|maintenance|operation group|id|updated)$/i;
+const KNOWN=/^(date|start|end|supervision|sex|age|asa|priority|speciality|operation|anaesthetic [12]|anesthetic 2: (operator status|technique)|procedure \d+(: (operator status|technique))?|notes|incidents|incident details|maintenance|operation group|id|updated|hosp: .*)$/i;
 const newId=()=>'n'+Date.now().toString(36)+Math.random().toString(36).slice(2,8);
 function readCsv(text){
   const rows=csvRows(text); if(!rows.length) throw new Error('The file is empty.');
@@ -131,7 +224,7 @@ function readCsv(text){
     const u=Date.parse(g('updated')); const mtv=g('maintenance'), mt=/^(tiva|tci)/i.test(mtv)?'TIVA':/^vol/i.test(mtv)?'Volatile':'';
     let x=null; rows[0].forEach((h,i)=>{const k=h.trim(); if(k&&!KNOWN.test(k)&&sp(r[i])){x=x||{};x[k]=sp(r[i])}});
     out.push({id,d,s:tm(g('start')),e:tm(g('end')),sup:g('supervision'),sex:g('sex'),age:age===''||isNaN(+age)?'':Math.round(+age),asa:g('asa'),pri:g('priority'),spec:g('speciality'),op:g('operation'),
-      a1:a1==='spinal'?'Spinal':a1,a2:g('anaesthetic 2'),a2s:g('anesthetic 2: operator status'),a2t:g('anesthetic 2: technique'),procs,notes:scrub(g('notes')),inc:g('incidents'),incd:scrub(g('incident details')),mt,u:isNaN(u)?0:u}); {const o=out[out.length-1], gv=g('operation group'); if(x) o.x=x; if(gv&&GROUPS.includes(gv)&&gv!==autoGroup(o)) o.grp=gv}
+      a1:a1==='spinal'?'Spinal':a1,a2:g('anaesthetic 2'),a2s:g('anesthetic 2: operator status'),a2t:g('anesthetic 2: technique'),procs,notes:scrub(g('notes')),inc:g('incidents'),incd:scrub(g('incident details')),mt,u:isNaN(u)?0:u}); {const o=out[out.length-1], gv=g('operation group'); const hh={}; HOSP_FIELDS.forEach(f=>{const v=g('hosp: '+f[1].toLowerCase()); if(v) hh[f[0]]=v}); if(Object.keys(hh).length) o.h=hh; if(x) o.x=x; if(gv&&GROUPS.includes(gv)&&gv!==autoGroup(o)) o.grp=gv}
   }
   return {cases:out,removed};
 }
@@ -293,8 +386,10 @@ function loadForm(c){
   const editing=!!F.id&&!F._copy;
   $('editBanner').hidden=!editing; if(editing) $('editText').textContent='Editing '+(F.op||'case')+', '+niceDate(F.d);
   $('save').textContent=editing?'Save changes':'Save case'; $('del').hidden=!editing; $('del').textContent='Delete'; delArmed=false;
-  redraw.forEach(f=>f()); drawOps(); a2vis();
+  redraw.forEach(f=>f()); drawOps(); a2vis(); drawHospCard();
 }
+function drawHospCard(){ const h=F.h; $('hospCard').hidden=!h; if(!h) return;
+  $('hospBody').innerHTML=HOSP_FIELDS.filter(f=>f[0]!=='hk'&&h[f[0]]).map(f=>'<div class="kv"><span>'+esc(f[1])+'</span><b>'+esc(h[f[0]])+'</b></div>').join('') }
 function a2vis(){ $('a2extra').hidden=!F.a2; $('mtBox').hidden=!isGA(F); if(!isGA(F)) F.mt='' }
 function drawGrp(){ const a=autoGroup({op:$('fOp').value,spec:F.spec}), v=F.grp||a; $('fGrp').innerHTML=(v?'':'<option value="">Set from the operation</option>')+GROUPS.map(x=>'<option'+(x===v?' selected':'')+'>'+esc(x)+'</option>').join('') }
 function drawOps(){
@@ -371,7 +466,7 @@ function drawList(){
     const time=flagged(c)?'<span class="flag">'+(c.s||'no time')+' · no duration</span>':esc(c.s+'–'+c.e);
     h+='<button type="button" class="case" data-id="'+esc(c.id)+'"><div class="op">'+esc(c.op||'(no operation)')+'</div><div class="m">'+
       esc([c.age!==''&&c.age!=null?c.age+(c.sex||''):c.sex,c.asa?'ASA '+c.asa:'',c.pri,c.spec,c.sup].filter(Boolean).join(' · '))+'</div><div class="m">'+esc(tech)+'</div><div class="m">'+time+
-      (c.notes?' · '+esc(c.notes):'')+(c.inc?' · <span class="flag">'+esc(c.inc)+'</span>':'')+'</div></button>';
+      (c.h?' · theatre record':'')+(c.notes?' · '+esc(c.notes):'')+(c.inc?' · <span class="flag">'+esc(c.inc)+'</span>':'')+'</div></button>';
   });
   $('list').innerHTML=h||'<div class="note">No cases match.</div>';
   $('moreBtn').hidden=all.length<=shown;
@@ -406,7 +501,7 @@ function tally(list,get,order){
 }
 function summarise(){
   const L=inRange(), n=L.length; let m=0; L.forEach(c=>{const a=mins(c.s),b=mins(c.e); if(a!=null&&b!=null&&b>a)m+=b-a});
-  const blocks=L.filter(c=>c.a2), gas=L.filter(isGA);
+  const blocks=L.filter(c=>c.a2), gas=L.filter(isGA), HL=L.filter(c=>c.h), rec=k=>HL.filter(c=>c.h[k]==='Yes'||c.h[k]==='No');
   const S={n,hours:Math.round(m/60),solo:L.filter(c=>c.sup==='Consultant Solo').length,teach:L.filter(c=>/^Teaching/.test(c.sup||'')).length,
     from:$('rFrom').value,to:$('rTo').value,sections:[
     ['Speciality',tally(L,c=>[c.spec])],
@@ -421,9 +516,13 @@ function summarise(){
     ['Block operator (of '+blocks.length+' blocks)',tally(blocks,c=>[c.a2s||'Not recorded']),blocks.length],
     ['Procedures and monitoring',tally(L,c=>(c.procs||[]).map(p=>p[0]))],
     ['Most frequent operations',tally(L,c=>[(opts().opMap.get(normOp(c.op))||{label:c.op}).label]).slice(0,15)],
+    ['Theatre record (hospital export), '+(HL.length?uk(HL.reduce((a,c)=>c.d<a?c.d:a,'9999'))+' to '+uk(HL.reduce((a,c)=>c.d>a?c.d:a,'0000')):''),(()=>{const lo=HL.reduce((a,c)=>c.d<a?c.d:a,'9999'),hi=HL.reduce((a,c)=>c.d>a?c.d:a,'0000'),W=L.filter(c=>c.d>=lo&&c.d<=hi);return [['Matched to a hospital record',HL.length,W.length],['No hospital record',W.length-HL.length,W.length]]})()],
+    ['Site (theatre record)',tally(HL,c=>[c.h.site])],
+    ['Airway (theatre record)',tally(HL,c=>[c.h.airway||'Not recorded']),HL.length],
+    ['Recovery (theatre record)',[['Pain needing attention',rec('recPain').filter(c=>c.h.recPain==='Yes').length,rec('recPain').length],['Nausea or vomiting',rec('recPonv').filter(c=>c.h.recPonv==='Yes').length,rec('recPonv').length],['Temperature below 36°C',rec('recHypo').filter(c=>c.h.recHypo==='Yes').length,rec('recHypo').length]]],
     ['Cases by year',tally(L,c=>[c.d.slice(0,4)]).sort((a,b)=>a[0]<b[0]?-1:1)]
   ],incidents:L.filter(c=>c.inc||c.incd)};
-  S.sections=S.sections.filter(s=>s[1].length&&!(s[0]==='Cases by year'&&s[1].length<2));
+  S.sections=S.sections.filter(s=>!(/theatre record/i.test(s[0])&&!L.some(c=>c.h))&&!(s[0]==='Recovery (theatre record)'&&!s[1].some(r=>r[2]))).map(s=>s[0]==='Recovery (theatre record)'?[s[0]+': % of cases where recorded',s[1].filter(r=>r[2])]:s).filter(s=>s[1].length&&!(s[0]==='Cases by year'&&s[1].length<2));
   return S;
 }
 function drawSummary(){
@@ -432,19 +531,19 @@ function drawSummary(){
     .map(t=>'<div class="tile"><b>'+t[0]+'</b><span>'+t[1]+'</span></div>').join('');
   let h='';
   S.sections.forEach(([title,rows,den])=>{const max=Math.max.apply(null,rows.map(r=>r[1]));
-    h+='<div class="card"><h2>'+esc(title)+'</h2><div class="bars">'+rows.map(r=>'<div class="n">'+esc(r[0])+'</div><div class="t" title="'+esc(r[0])+': '+r[1]+'"><i style="width:'+(100*r[1]/max).toFixed(1)+'%"></i></div><div class="v"><b>'+r[1]+'</b> '+pc(r[1],den)+'</div>').join('')+'</div></div>'});
+    h+='<div class="card"><h2>'+esc(title)+'</h2><div class="bars">'+rows.map(r=>'<div class="n">'+esc(r[0])+'</div><div class="t" title="'+esc(r[0])+': '+r[1]+'"><i style="width:'+(100*r[1]/max).toFixed(1)+'%"></i></div><div class="v"><b>'+r[1]+'</b> '+pc(r[1],r[2]||den)+'</div>').join('')+'</div></div>'});
   if(S.incidents.length) h+='<div class="card"><h2>Incidents and notes of concern</h2>'+S.incidents.map(c=>'<div class="m"><b>'+esc(niceDate(c.d))+'</b> '+esc(c.op)+': '+esc([c.inc,c.incd].filter(Boolean).join(', '))+'</div>').join('')+'</div>';
   $('sections').innerHTML=h||'<div class="note">No cases in this period.</div>';
 }
 function summaryText(){
   const S=summarise(); let t='Anaesthetic logbook summary\n'+niceDate(S.from)+' to '+niceDate(S.to)+'\n\nCases: '+S.n+'\nHours (cases with times): '+S.hours+'\nConsultant solo: '+S.solo+'\nTeaching: '+S.teach+'\n';
-  S.sections.forEach(([title,rows,den])=>{const d=den||S.n;t+='\n'+title+'\n'+rows.map(r=>'  '+r[0]+': '+r[1]+(d?' ('+Math.round(100*r[1]/d)+'%)':'')).join('\n')+'\n'});
+  S.sections.forEach(([title,rows,den])=>{t+='\n'+title+'\n'+rows.map(r=>{const d=r[2]||den||S.n;return '  '+r[0]+': '+r[1]+(d?' ('+Math.round(100*r[1]/d)+'%)':'')}).join('\n')+'\n'});
   if(S.incidents.length) t+='\nIncidents\n'+S.incidents.map(c=>'  '+uk(c.d)+' '+c.op+': '+[c.inc,c.incd].filter(Boolean).join(', ')).join('\n')+'\n';
   return t;
 }
 function summaryCsv(){
   const S=summarise(); const rows=[['Section','Item','Cases','Percent of cases'],['Period','From '+uk(S.from)+' to '+uk(S.to),S.n,''],['Totals','Hours (cases with times)',S.hours,''],['Totals','Consultant solo',S.solo,''],['Totals','Teaching',S.teach,'']];
-  S.sections.forEach(([title,r,den])=>r.forEach(x=>rows.push([title,x[0],x[1],(den||S.n)?Math.round(100*x[1]/(den||S.n)):''])));
+  S.sections.forEach(([title,r,den])=>r.forEach(x=>{const d=x[2]||den||S.n;rows.push([title,x[0],x[1],d?Math.round(100*x[1]/d):''])}));
   return rows.map(r=>r.map(q).join(',')).join('\r\n')+'\r\n';
 }
 function casesCsv(){return toCsv(inRange(),false)}
@@ -462,15 +561,40 @@ function setupSummary(){
   $('cpCsv').onclick=()=>copy(casesCsv(),'Cases copied as CSV');
 }
 
+
+/* ---------- import hospital export ---------- */
+let hpPlan=null;
+const hpLine=(d,t,op,sex,age)=>esc(uk(d)+' '+(t||'')+' · '+op+(sex||age!==''&&age!=null?' · '+(sex||'')+(age===''||age==null?'':age):''));
+function setupHospImport(){
+  $('hpFile').onchange=async()=>{ const f=$('hpFile').files[0]; if(!f) return; $('hpFile').value='';
+    try{ const recs=readHospital(await f.text()); if(!recs.length) throw new Error('No cases found in that file.');
+      const res=matchHospital(cases(),recs); const sure=res.pairs.filter(p=>p.sure), check=res.pairs.filter(p=>!p.sure);
+      hpPlan={sure,check,add:res.newRecs,already:res.already};
+      const ds=recs.map(r=>r.d).sort();
+      let h='<div>'+recs.length+' theatre records from '+uk(ds[0])+' to '+uk(ds[ds.length-1])+'.</div><ul class="hpsum"><li><b>'+sure.length+'</b> match a case in your logbook.</li>'+
+        (check.length?'<li><b>'+check.length+'</b> possible matches to check below.</li>':'')+(res.newRecs.length?'<li><b>'+res.newRecs.length+'</b> are not in your logbook.</li>':'')+(res.already.length?'<li><b>'+res.already.length+'</b> were imported before and are skipped.</li>':'')+'</ul>';
+      if(check.length) h+='<h3>Possible matches</h3><div class="note">Tick the pairs that are the same case. Unticked pairs are left alone.</div>'+check.map((p,i)=>'<label class="hprow"><input type="checkbox" data-k="c'+i+'"><span><span class="m">Logbook</span> '+hpLine(p.c.d,p.c.s,p.c.op,p.c.sex,p.c.age)+'<br><span class="m">Hospital</span> '+hpLine(p.r.d,p.r.tAn||p.r.tTh,p.r.proc,p.r.sex,p.r.hage)+'</span></label>').join('');
+      if(res.newRecs.length) h+='<h3>Not in your logbook</h3><div class="note">Ticked records are added as new cases. Local anaesthetic cases start unticked.</div>'+res.newRecs.map((r,i)=>'<label class="hprow"><input type="checkbox" data-k="n'+i+'"'+(/local/i.test(r.tech)?'':' checked')+'><span>'+hpLine(r.d,r.tAn||r.tTh,r.proc,r.sex,r.hage)+'<br><span class="m">'+esc(r.tech+(r.anaes&&r.anaes!==r.cons?' · with '+r.anaes:''))+'</span></span></label>').join('');
+      $('hpList').innerHTML=h; $('hpConfirm').hidden=false; $('hpGo').textContent='Import'; 
+    }catch(e){ toast(e.message||'Could not read that file.') } };
+  $('hpNo').onclick=()=>{hpPlan=null;$('hpConfirm').hidden=true;$('hpList').innerHTML=''};
+  $('hpGo').onclick=()=>{ if(!hpPlan) return; const ticked=k=>{const b=document.querySelector('#hpList input[data-k="'+k+'"]');return !!(b&&b.checked)};
+    const pairs=hpPlan.sure.concat(hpPlan.check.filter((p,i)=>ticked('c'+i))), adds=hpPlan.add.filter((r,i)=>ticked('n'+i)), now=Date.now();
+    pairs.forEach(p=>{const i=all.findIndex(x=>x.id===p.c.id); if(i<0) return; const n=mergeHospital(all[i],p.r); n.u=now; all[i]=n; dirty[n.id]=n});
+    adds.forEach(r=>{const n=caseFromHospital(r); n.u=now; all.push(n); dirty[n.id]=n});
+    meta.changed=true; cache=null; hpPlan=null; $('hpConfirm').hidden=true; $('hpList').innerHTML=''; persist(); syncLabel(); refresh(); syncSoon();
+    toast(pairs.length+' cases updated'+(adds.length?', '+adds.length+' added':'')) };
+}
+
 /* ---------- appraisal report ---------- */
 function reportBody(){
   const S=summarise(), L=inRange().slice().reverse(), pc=(x,d)=>{d=d||S.n;return d?Math.round(100*x/d)+'%':''};
   let h='<h1>Anaesthetic logbook: appraisal report</h1><p class="sub">'+esc(niceDate(S.from))+' to '+esc(niceDate(S.to))+' · generated '+esc(niceDate(today()))+'</p>';
   h+='<table class="tot"><tr><th>Cases</th><th>Hours (cases with times)</th><th>Consultant solo</th><th>Teaching</th></tr><tr><td>'+S.n+'</td><td>'+S.hours+'</td><td>'+S.solo+' ('+pc(S.solo)+')</td><td>'+S.teach+' ('+pc(S.teach)+')</td></tr></table>';
-  h+='<h2>Summary</h2><div class="cols">'+S.sections.map(([t,rows,den])=>'<table class="sum"><tr><th>'+esc(t)+'</th><th>Cases</th><th>%</th></tr>'+rows.map(r=>'<tr><td>'+esc(r[0])+'</td><td>'+r[1]+'</td><td>'+pc(r[1],den)+'</td></tr>').join('')+'</table>').join('')+'</div>';
+  h+='<h2>Summary</h2><div class="cols">'+S.sections.map(([t,rows,den])=>'<table class="sum"><tr><th>'+esc(t)+'</th><th>Cases</th><th>%</th></tr>'+rows.map(r=>'<tr><td>'+esc(r[0])+'</td><td>'+r[1]+'</td><td>'+pc(r[1],r[2]||den)+'</td></tr>').join('')+'</table>').join('')+'</div>';
   h+='<h2>Incidents</h2>'+(S.incidents.length?'<table class="cases"><tr><th>Date</th><th>Operation</th><th>Incident</th><th>Details</th></tr>'+S.incidents.map(c=>'<tr><td>'+uk(c.d)+'</td><td>'+esc(c.op)+'</td><td>'+esc(c.inc)+'</td><td>'+esc(c.incd)+'</td></tr>').join('')+'</table>':'<p>None recorded in this period.</p>');
-  h+='<h2>All cases ('+L.length+')</h2><table class="cases"><thead><tr><th>#</th><th>Date</th><th>Time</th><th>Age</th><th>Sex</th><th>ASA</th><th>Priority</th><th>Speciality</th><th>Operation</th><th>Anaesthetic</th><th>Regional</th><th>Procedures</th><th>Supervision</th><th>Notes</th></tr></thead><tbody>'+
-    L.map((c,i)=>'<tr><td>'+(i+1)+'</td><td>'+uk(c.d)+'</td><td>'+esc(c.s&&c.e&&c.s!==c.e?c.s+'–'+c.e:c.s||'')+'</td><td>'+esc(c.age)+'</td><td>'+esc(c.sex)+'</td><td>'+esc(c.asa)+'</td><td>'+esc(c.pri)+'</td><td>'+esc(c.spec)+'</td><td>'+esc(c.op)+'</td><td>'+esc([c.a1,MT[maint(c)]].filter(Boolean).join(', '))+'</td><td>'+esc([c.a2,c.a2s,c.a2t].filter(Boolean).join(', '))+'</td><td>'+esc((c.procs||[]).map(p=>p[0]+(p[1]?' ('+p[1]+')':'')).join(', '))+'</td><td>'+esc(c.sup)+'</td><td>'+esc([c.notes,c.inc,c.incd].filter(Boolean).join('; '))+'</td></tr>').join('')+'</tbody></table>';
+  h+='<h2>All cases ('+L.length+')</h2><table class="cases"><thead><tr><th>#</th><th>Date</th><th>Time</th><th>Age</th><th>Sex</th><th>ASA</th><th>Priority</th><th>Speciality</th><th>Operation</th><th>Anaesthetic</th><th>Regional</th><th>Procedures</th><th>Supervision</th><th>Theatre record</th><th>Notes</th></tr></thead><tbody>'+
+    L.map((c,i)=>'<tr><td>'+(i+1)+'</td><td>'+uk(c.d)+'</td><td>'+esc(c.s&&c.e&&c.s!==c.e?c.s+'–'+c.e:c.s||'')+'</td><td>'+esc(c.age)+'</td><td>'+esc(c.sex)+'</td><td>'+esc(c.asa)+'</td><td>'+esc(c.pri)+'</td><td>'+esc(c.spec)+'</td><td>'+esc(c.op)+'</td><td>'+esc([c.a1,MT[maint(c)]].filter(Boolean).join(', '))+'</td><td>'+esc([c.a2,c.a2s,c.a2t].filter(Boolean).join(', '))+'</td><td>'+esc((c.procs||[]).map(p=>p[0]+(p[1]?' ('+p[1]+')':'')).join(', '))+'</td><td>'+esc(c.sup)+'</td><td>'+esc(c.h?[c.h.site&&c.h.site.split(' ')[0],c.h.surgeon,c.h.airway,c.h.recPonv==='Yes'?'PONV':''].filter(Boolean).join(', '):'')+'</td><td>'+esc([c.notes,c.inc,c.incd].filter(Boolean).join('; '))+'</td></tr>').join('')+'</tbody></table>';
   return h;
 }
 const REPORT_CSS='.rpt{font:12px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#111}.rpt h1{font-size:20px;margin:0 0 2px}.rpt .sub{margin:0 0 12px;color:#444}.rpt h2{font-size:14px;margin:18px 0 6px;border-bottom:1px solid #999;padding-bottom:2px}.rpt table{border-collapse:collapse;margin:0 0 10px}.rpt th,.rpt td{border:1px solid #bbb;padding:2px 5px;text-align:left;vertical-align:top}.rpt th{background:#eee}.rpt .cols{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start}.rpt .sum td:nth-child(n+2),.rpt .tot td{text-align:right;font-variant-numeric:tabular-nums}.rpt .cases{width:100%;font-size:10.5px}.rpt .cases thead{display:table-header-group}.rpt tr,.rpt .sum,.rpt .tot{break-inside:avoid}.rpt .cases td:nth-child(2),.rpt .cases td:nth-child(3){white-space:nowrap}@page{size:A4 landscape;margin:10mm}';
@@ -495,7 +619,7 @@ function route(){
 function refresh(){ const v=location.hash.slice(1); if(v==='cases'){yearOptions();drawList()} else if(v==='summary') drawSummary(); else if(v!=='backup'&&!F.id){redraw.forEach(f=>f());drawOps()} }
 async function start(){
   try{ all=(await idb.get('cases'))||[]; dirty=(await idb.get('dirty'))||{}; meta=Object.assign(meta,(await idb.get('meta'))||{}); cfg=(await idb.get('cfg'))||null; if(meta.v!==2){meta.v=2;meta.sha='';meta.etag=''} }catch(e){ toast('This browser is blocking storage, so cases cannot be kept. Leave private browsing.') }
-  F=blank(); setupForm(); setupList(); setupSummary(); setupBackup(); setupDates(); loadForm(blank()); setRange('12 months'); route(); syncLabel();
+  F=blank(); setupForm(); setupList(); setupSummary(); setupBackup(); setupHospImport(); setupDates(); loadForm(blank()); setRange('12 months'); route(); syncLabel();
   window.addEventListener('hashchange',route);
   window.addEventListener('online',()=>sync(true));
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&cfg&&Date.now()-meta.lastSync>5*60e3)sync(true)});

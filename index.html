@@ -61,6 +61,7 @@
       <div class="g"><label class="l" for="fIncd">Incident details</label><textarea id="fIncd"></textarea></div>
     </details>
   </div>
+  <details class="card" id="hospCard" hidden><summary>Hospital theatre record</summary><div id="hospBody" class="kvs"></div></details>
   <div class="note warn" id="formErr" hidden></div>
   <div class="actions"><button class="btn primary" id="save" type="button">Save case</button><button class="btn danger" id="del" type="button" hidden>Delete</button></div>
 </section>
@@ -125,7 +126,13 @@
     <div class="note" id="tdState"></div>
     <div class="actions"><button class="btn" id="tdGo" type="button" hidden>Rename</button></div>
   </div>
-  <div class="note">Version 1.2. Cases are stored on this phone and in the places above, nowhere else.</div>
+  <div class="card">
+    <h2>Import hospital theatre records</h2>
+    <div class="note">Matches a theatre system export (CSV) to your cases by date, time, operation, age and sex, then adds the hospital detail: site, surgeon, airway, theatre times, maintenance agent and recovery outcomes. Patient IDs, dates of death and free-text recovery notes are never imported. Importing the same file again skips records already added.</div>
+    <label class="l" for="hpFile">Choose the export</label><input type="file" id="hpFile" accept=".csv,text/csv,text/comma-separated-values">
+    <div class="g" id="hpConfirm" hidden><div id="hpList" class="g"></div><div class="actions"><button class="btn primary" id="hpGo" type="button">Import</button><button class="btn" id="hpNo" type="button">Cancel</button></div></div>
+  </div>
+  <div class="note">Version 1.3. Cases are stored on this phone and in the places above, nowhere else.</div>
 </section>
 </main>
 <nav><a href="#new" data-v="new">New case</a><a href="#cases" data-v="cases">Cases</a><a href="#summary" data-v="summary">Summary</a><a href="#backup" data-v="backup">Backup</a></nav>

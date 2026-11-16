@@ -97,3 +97,11 @@ button:disabled{opacity:.6}
   #report{position:static;overflow:visible;padding:0}
   #rpBody{overflow:visible}
 }
+.hprow{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--line);font-size:14px;cursor:pointer}
+.hprow input{width:22px;height:22px;flex:none;margin-top:2px;accent-color:var(--accent)}
+.hprow .m,.kv span{color:var(--muted);font-size:12px}
+#v-backup h3{font-size:14px;margin:8px 0 0}
+.hpsum{margin:4px 0 0;padding-left:18px;font-size:14px}
+.kvs{display:grid;grid-template-columns:1fr;gap:4px}
+.kv{display:flex;justify-content:space-between;gap:12px;font-size:14px;border-bottom:1px solid var(--line);padding:3px 0}
+.kv b{font-weight:500;text-align:right;overflow-wrap:anywhere}
