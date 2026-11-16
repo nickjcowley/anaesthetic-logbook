@@ -269,7 +269,7 @@ function applyDirty(list,d){const m=new Map(list.map(c=>[c.id,c])); Object.keys(
 let syncing=false, syncAgain=false, syncT;
 function syncSoon(){clearTimeout(syncT); syncT=setTimeout(()=>sync(false),1200)}
 async function sync(pull){
-  if(!cfg) return; if(syncing){syncAgain=true;return} if(navigator.onLine===false){syncLabel();return}
+  if(!cfg) return false; if(syncing){syncAgain=true;return null} if(navigator.onLine===false){syncLabel();return false}
   syncing=true; let tries=0, failed=false;
   try{
     for(;;){
@@ -289,6 +289,7 @@ async function sync(pull){
     const merged=mergeStats(stats,remote); stats=merged; if(statsDirty&&JSON.stringify(merged)!==JSON.stringify(remote)) await ghPut(c,JSON.stringify(merged),got.missing?'':got.sha,'Mortality totals update'); statsDirty=false }catch(e){} }
   syncing=false; persist(); syncLabel(); refresh();
   if(!failed&&(syncAgain||Object.keys(dirty).length)){syncAgain=false;syncSoon()} else syncAgain=false;
+  return !failed;
 }
 
 /* ---------- backup view ---------- */
@@ -329,7 +330,9 @@ function setupBackup(){
     pendingCfg=pendingRemote=null; $('ghChoice').hidden=true; cache=null; persist(); toast('Connected'); syncLabel(); refresh(); sync(false) };
   $('ghUseRemote').onclick=()=>choose(true); $('ghUseLocal').onclick=()=>choose(false);
   $('ghCancel').onclick=()=>{pendingCfg=pendingRemote=null;$('ghChoice').hidden=true;drawBackup()};
-  $('ghSync').onclick=()=>{toast('Syncing…');sync(true)};
+  const report=ok=>toast(ok===null?'A sync is already running. Try again in a moment.':ok?'Up to date: '+cases().length.toLocaleString('en-GB')+' cases, '+all.filter(c=>c.h).length+' with a theatre record':(syncErr||'Could not reach GitHub. Check your connection and try again.'));
+  $('ghSync').onclick=async()=>{toast('Syncing…');report(await sync(true))};
+  $('ghReload').onclick=async()=>{toast('Reloading from GitHub…');meta.sha='';meta.etag='';report(await sync(true))};
   let offArmed=false; $('ghOff').onclick=()=>{ if(!offArmed){offArmed=true;$('ghOff').textContent='Tap again to disconnect';return} offArmed=false;$('ghOff').textContent='Disconnect';
     cfg=null;meta.sha='';meta.etag='';meta.replace=false;dirty={};syncErr='';persist();syncLabel();toast('Disconnected. The token was removed from this phone.') };
   $('bkSave').onclick=async()=>{
